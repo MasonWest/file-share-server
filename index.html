@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>FastAPI File Share</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-6">
+
+<div id="app" class="max-w-3xl mx-auto bg-white shadow-xl rounded-xl p-6">
+
+  <h1 class="text-3xl font-bold mb-4">📁 文件共享面板</h1>
+
+  <!-- 路径导航 -->
+  <div class="mb-4 p-3 bg-gray-50 rounded-lg">
+    <div class="flex items-center space-x-1 text-sm">
+      <span @click="goToPath('')" class="cursor-pointer text-blue-600 hover:text-blue-800">根目录</span>
+      <span v-for="(part, index) in pathParts" :key="index">
+        <span class="mx-1">/</span>
+        <span @click="goToPath(pathParts.slice(0, index + 1).join('/'))" 
+              class="cursor-pointer text-blue-600 hover:text-blue-800">
+          {{ part }}
+        </span>
+      </span>
+    </div>
+  </div>
+
+  <!-- 文件上传 -->
+  <div class="mb-6">
+    <input type="file" @change="selectFile" class="mb-2">
+    <button @click="upload"
+            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+      上传
+    </button>
+
+    <!-- 上传进度 -->
+    <div v-if="progress > 0" class="mt-2 bg-gray-200 rounded-lg h-2">
+      <div class="bg-blue-500 h-2 rounded-lg" :style="{ width: progress + '%' }"></div>
+    </div>
+  </div>
+
+  <h2 class="text-xl font-semibold mb-2">📁 文件夹</h2>
+  <div class="space-y-2 mb-6">
+    <div v-for="folder in sortedFolders" :key="folder.name"
+         @click="enterFolder(folder.name)"
+         class="flex justify-between items-center bg-blue-50 p-3 rounded-lg shadow-sm cursor-pointer hover:bg-blue-100">
+      <div>
+        <div class="font-semibold flex items-center">
+          <span class="mr-2">📁</span>
+          {{ folder.name }}
+        </div>
+        <div class="text-xs text-gray-500">
+          文件夹 · {{ new Date(folder.mtime * 1000).toLocaleString() }}
+        </div>
+      </div>
+      <div class="text-blue-600">→</div>
+    </div>
+  </div>
+
+  <div class="flex justify-between items-center mb-2">
+    <h2 class="text-xl font-semibold">📄 文件</h2>
+    <div class="flex items-center space-x-2">
+      <span class="text-sm text-gray-600">排序:</span>
+      <div class="flex space-x-1">
+        <button @click="setFileSort('name')" 
+                :class="fileSortBy === 'name' ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-700 border-gray-300'"
+                class="px-3 py-1 text-sm border rounded-lg hover:bg-gray-200">
+          名称 {{ fileSortBy === 'name' ? (fileSortOrder === 'asc' ? '↑' : '↓') : '' }}
+        </button>
+        <button @click="setFileSort('size')" 
+                :class="fileSortBy === 'size' ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-700 border-gray-300'"
+                class="px-3 py-1 text-sm border rounded-lg hover:bg-gray-200">
+          大小 {{ fileSortBy === 'size' ? (fileSortOrder === 'asc' ? '↑' : '↓') : '' }}
+        </button>
+        <button @click="setFileSort('mtime')" 
+                :class="fileSortBy === 'mtime' ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-700 border-gray-300'"
+                class="px-3 py-1 text-sm border rounded-lg hover:bg-gray-200">
+          修改日期 {{ fileSortBy === 'mtime' ? (fileSortOrder === 'asc' ? '↑' : '↓') : '' }}
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="space-y-2">
+    <div v-for="file in sortedFiles" :key="file.name"
+         class="flex justify-between items-center bg-gray-50 p-3 rounded-lg shadow-sm">
+      <div>
+        <div class="font-semibold">{{ file.name }}</div>
+        <div class="text-xs text-gray-500">
+          {{ (file.size / 1024).toFixed(1) }} KB · 
+          {{ new Date(file.mtime * 1000).toLocaleString() }}
+        </div>
+      </div>
+      <button @click="download(file.name)"
+              class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700">
+        下载
+      </button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const { createApp, ref, computed } = Vue
+
+createApp({
+  setup() {
+    const currentPath = ref("")
+    const folders = ref([])
+    const files = ref([])
+    const selectedFile = ref(null)
+    const progress = ref(0)
+
+    const apiBase = window.location.origin + "/api"
+
+    // 排序状态
+    const fileSortBy = ref("name") // name, size, mtime
+    const fileSortOrder = ref("asc") // asc, desc
+
+    const pathParts = computed(() => {
+      return currentPath.value ? currentPath.value.split('/').filter(p => p) : []
+    })
+
+    // 排序后的文件夹（按名称排序）
+    const sortedFolders = computed(() => {
+      return [...folders.value].sort((a, b) => {
+        return a.name.localeCompare(b.name, 'zh-CN')
+      })
+    })
+
+    // 排序后的文件
+    const sortedFiles = computed(() => {
+      return [...files.value].sort((a, b) => {
+        let compareResult = 0
+        
+        if (fileSortBy.value === "name") {
+          compareResult = a.name.localeCompare(b.name, 'zh-CN')
+        } else if (fileSortBy.value === "size") {
+          compareResult = a.size - b.size
+        } else if (fileSortBy.value === "mtime") {
+          compareResult = a.mtime - b.mtime
+        }
+        
+        // 根据排序顺序调整
+        return fileSortOrder.value === "asc" ? compareResult : -compareResult
+      })
+    })
+
+    function setFileSort(sortBy) {
+      if (fileSortBy.value === sortBy) {
+        // 相同排序字段，切换顺序
+        fileSortOrder.value = fileSortOrder.value === "asc" ? "desc" : "asc"
+      } else {
+        // 不同排序字段，重置为升序
+        fileSortBy.value = sortBy
+        fileSortOrder.value = "asc"
+      }
+    }
+
+    function fetchFiles(path = "") {
+      const url = path ? `${apiBase}/list/${path}` : `${apiBase}/list`
+      fetch(url)
+          .then(r => r.json())
+          .then(data => {
+            currentPath.value = data.path
+            folders.value = data.folders || []
+            files.value = data.files || []
+          })
+    }
+
+    function selectFile(e) {
+      selectedFile.value = e.target.files[0]
+    }
+
+    function upload() {
+      if (!selectedFile.value) return alert("未选择文件")
+
+      const formData = new FormData()
+      formData.append("file", selectedFile.value)
+
+      const xhr = new XMLHttpRequest()
+      const uploadUrl = currentPath.value ? 
+          `${apiBase}/upload?path=${encodeURIComponent(currentPath.value)}` : 
+          `${apiBase}/upload`
+      xhr.open("POST", uploadUrl)
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          progress.value = Math.round((event.loaded / event.total) * 100)
+        }
+      }
+
+      xhr.onload = () => {
+        progress.value = 0
+        if (xhr.status === 200) {
+            fetchFiles(currentPath.value)
+            alert("上传成功")
+        } else {
+          alert("上传失败：" + xhr.responseText)
+        }
+      }
+
+      xhr.send(formData)
+    }
+
+    function download(filename) {
+      const downloadUrl = currentPath.value ? 
+          `${apiBase}/download/${currentPath.value}/${filename}` : 
+          `${apiBase}/download/${filename}`
+      window.open(downloadUrl)
+    }
+
+    function enterFolder(folderName) {
+      const newPath = currentPath.value ? 
+          `${currentPath.value}/${folderName}` : 
+          folderName
+      fetchFiles(newPath)
+    }
+
+    function goToPath(path) {
+      fetchFiles(path)
+    }
+
+    fetchFiles()
+
+    return { 
+      currentPath, 
+      folders, 
+      files, 
+      sortedFolders,
+      sortedFiles,
+      fileSortBy,
+      fileSortOrder,
+      pathParts,
+      selectedFile, 
+      progress, 
+      selectFile, 
+      upload, 
+      download, 
+      enterFolder, 
+      goToPath,
+      setFileSort
+    }
+  }
+}).mount("#app")
+</script>
+
+</body>
+</html>
