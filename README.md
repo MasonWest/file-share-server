@@ -1,5 +1,10 @@
 # 局域网文件共享服务器
 
+![Python](https://img.shields.io/badge/Python-3.7+-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.68+-green)
+![Vue.js](https://img.shields.io/badge/Vue.js-3.0+-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
 一个简单易用的局域网文件共享工具，支持文件夹浏览、文件上传下载和排序功能。
 
 ## 功能特性
@@ -137,8 +142,30 @@ PORT=8888
 
 ## 许可证
 
-自由使用，请遵守当地法律法规。
+MIT License - 详见 [LICENSE](LICENSE) 文件
+
+## GitHub仓库
+
+本项目已开源，欢迎Star和贡献！
+
+```bash
+# 克隆项目
+git clone https://github.com/YOUR_USERNAME/file-share-server.git
+cd file-share-server
+```
+
+### 贡献指南
+1. Fork本仓库
+2. 创建功能分支 (`git checkout -b feature/新功能`)
+3. 提交更改 (`git commit -m '添加新功能'`)
+4. 推送到分支 (`git push origin feature/新功能`)
+5. 创建Pull Request
+
+### 问题反馈
+如有问题或建议，请在GitHub Issues中提出。
 
 ---
 
 **开始分享你的文件吧！** 🚀
+
+*如果觉得这个项目有用，请给个Star支持一下！* ⭐
