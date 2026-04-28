@@ -40,7 +40,7 @@ SHARE_DIR=D:\SharedFiles
 ADMIN_TOKEN=your_secure_password_here
 
 # 网络配置
-PUBLIC_BASE_URL=http://221.11.22.70:9900  # 必须包含协议头和端口
+PUBLIC_BASE_URL=http://example.com:9900  # 必须包含协议头和端口，例如：http://your-domain.com:9900
 ALLOW_OVERWRITE=false
 
 # 链接配置
