@@ -6,6 +6,9 @@ echo ========================================
 echo File Share Server
 echo ========================================
 echo.
+echo Admin panel: http://YOUR_SERVER_IP:8800
+echo Public download: http://YOUR_SERVER_IP:9900
+echo.
 
 where python >nul 2>&1
 if errorlevel 1 (
@@ -15,18 +18,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python -c "import fastapi, uvicorn, dotenv, multipart" >nul 2>&1
-if errorlevel 1 (
-    echo Installing dependencies from requirements.txt ...
-    python -m pip install -r requirements.txt
-    if errorlevel 1 (
-        echo [ERROR] Failed to install dependencies.
-        pause
-        exit /b 1
-    )
-)
-
-echo Starting server ...
+echo Starting dual-port server ...
 python run_server.py
 
 if errorlevel 1 (

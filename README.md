@@ -1,25 +1,26 @@
-# 局域网文件共享服务
+# 局域网和公网分离文件共享服务
 
 ![Python](https://img.shields.io/badge/Python-3.7+-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.124.2-green)
 ![Vue.js](https://img.shields.io/badge/Vue.js-3-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-一个简单直接的局域网文件共享工具，支持目录浏览、文件上传下载、当前目录搜索，以及临时分享链接。
+这是一个最小改造的文件共享服务，将管理权限与公共下载彻底分离：
 
-## 功能
+- **管理端 (默认 8800)**：提供完整的管理功能，受 Token 保护，建议仅限内网/本机访问。
+- **公共下载端 (默认 9900)**：**极简暴露**，仅提供 `/s/{token}` 下载接口，无任何管理权限，适合直接映射到公网。
 
-- 浏览共享目录及子目录
-- 上传和下载文件
-- 按名称、大小、修改时间排序
-- 当前目录内搜索文件和文件夹
-- 一键生成临时分享链接并复制到剪贴板
-- 路径安全校验，限制访问范围在 `SHARE_DIR` 内
+## 功能特性
 
-## 运行要求
-
-- Python 3.7+
-- Windows 推荐直接使用 `start_server.bat`
+- **双重隔离**：物理端口隔离管理流与下载流。
+- **文件管理**：浏览目录、子目录、文件上传、下载、删除（需权限）。
+- **实时搜索**：当前目录内快速过滤。
+- **临时分享**：一键生成带 Token 的临时下载链接。
+- **🔥 增强统计**：
+  - **实时日志**：控制台实时打印下载动作（包含 IP、文件、Token）。
+  - **次数统计**：记录每个分享链接的累计下载次数。
+  - **下载轨迹**：内存保留最近 10 次下载的详细 IP 和时间戳。
+- **路径安全**：严格校验 `..` 穿越和绝对路径，禁止越界访问。
 
 ## 快速开始
 
@@ -29,127 +30,71 @@
 pip install -r requirements.txt
 ```
 
-### 2. 配置共享目录
+### 2. 环境配置
 
-复制 `.env.example` 为 `.env`，然后修改：
+复制 `.env.example` 为 `.env`，并按需修改：
 
 ```env
+# 基础配置
 SHARE_DIR=D:\SharedFiles
-PORT=8800
-HOST=0.0.0.0
+ADMIN_TOKEN=your_secure_password_here
+
+# 网络配置
+PUBLIC_BASE_URL=http://221.11.22.70:9900  # 必须包含协议头和端口
 ALLOW_OVERWRITE=false
+
+# 链接配置
+TOKEN_EXPIRE_HOURS=24  # 分享链接默认有效期（小时）
 ```
 
 ### 3. 启动服务
 
-Windows：
-
+Windows 环境：
 ```bat
 start_server.bat
 ```
 
-或直接：
-
+通用方式：
 ```bash
 python run_server.py
 ```
 
-### 4. 访问
+## 访问说明
 
-- 本机访问：`http://localhost:8800`
-- 局域网访问：`http://你的IP:8800`
+### 管理界面 (Admin)
+- **地址**：默认 `http://127.0.0.1:8800`
+- **认证**：首次进入需输入 `.env` 中配置的 `ADMIN_TOKEN`。
+- **统计查看**：后端提供 `/api/shares` 接口供管理员查看当前所有活跃链接及其下载统计。
 
-## 配置项
+### 下载服务 (Public)
+- **地址**：默认 `http://0.0.0.0:9900`
+- **权限**：仅允许 `/s/{token}`。任何试图访问根目录、管理 API 或非法路径的行为均返回 `403 Forbidden`。
 
-`.env` 支持以下参数：
+## 分享链接机制
 
-```env
-SHARE_DIR=shared
-PORT=8800
-HOST=0.0.0.0
-ALLOW_OVERWRITE=false
-```
+- **生成**：管理端点击“分享链接”生成。
+- **地址格式**：`{PUBLIC_BASE_URL}/s/{token}`
+- **有效期**：由 `TOKEN_EXPIRE_HOURS` 控制，默认 24 小时。
+- **持久性**：Token 存储在内存中，**服务重启后会失效**。
 
-说明：
+## 安全与约束
 
-- `SHARE_DIR`：共享目录根路径
-- `PORT`：监听端口，默认 `8800`
-- `HOST`：监听地址，默认 `0.0.0.0`
-- `ALLOW_OVERWRITE`：是否允许上传覆盖同名文件，默认 `false`
-
-## 临时分享链接
-
-文件列表中的“分享链接”按钮会调用后端生成一个临时下载地址。
-
-当前实现：
-
-- token 为 32 位随机字符串
-- 默认有效期 1 小时
-- token 映射保存在内存中
-- 服务重启后，已生成的分享链接会失效
-- 链接访问路径为 `/s/{token}`
-
-## 安全限制
-
-为了避免越权访问，后端做了这些限制：
-
-- 所有文件操作都必须落在 `SHARE_DIR` 下
-- 禁止绝对路径
-- 禁止使用 `..` 做路径穿越
-- 目标文件不存在时返回 `404`
-- 分享 token 不存在或已过期时返回 `404`
-
-## 搜索说明
-
-当前搜索只过滤“当前目录已经列出来的内容”，不会递归搜索子目录。
-
-这样做的原因是：
-
-- 当前实现更快
-- 前端开销小
-- 共享目录文件很多时不会明显拖慢页面响应
-
-如果后续确实要做递归搜索，建议放到后端实现，并增加结果数量限制。
+1. **零越界**：所有操作限制在 `SHARE_DIR` 及其子目录下。
+2. **防爆破**：管理 Token 错误多次后会触发 IP 临时锁定（24小时）。
+3. **公网友好**：9900 端口即使映射到公网，攻击者也无法通过该端口探测文件列表或上传文件。
 
 ## 项目结构
 
 ```text
 fastAPI/
-├── filesvc_api.py       # FastAPI 后端
-├── index.html           # 前端页面
-├── run_server.py        # Python 启动入口
-├── start_server.bat     # Windows 启动脚本
-├── requirements.txt     # 依赖列表
-├── .env.example         # 配置示例
-├── README.md            # 项目说明
-├── github发布指南.md    # GitHub 发布说明
-└── 发布检查清单.txt      # 发布前检查清单
+├── filesvc_api.py   # 核心逻辑（Admin/Public 应用定义）
+├── index.html       # 单页管理端 UI
+├── run_server.py    # 双端口启动入口
+├── start_server.bat # Windows 快捷启动
+├── requirements.txt # 依赖列表
+└── .env             # 敏感配置
 ```
-
-## 常见问题
-
-### 1. 无法访问页面
-
-- 检查端口是否被占用
-- 检查防火墙是否放行对应端口
-- 检查 `.env` 中的 `HOST` 和 `PORT`
-
-### 2. 上传失败
-
-- 检查 `SHARE_DIR` 是否可写
-- 检查磁盘空间是否足够
-- 检查 `ALLOW_OVERWRITE` 是否允许覆盖
-
-### 3. 分享链接失效
-
-- token 已过期
-- 服务已重启
-- 原文件已被删除或移动
-
-## GitHub
-
-如果你准备把这个项目发到 GitHub，参考 [github发布指南.md](github发布指南.md)。
 
 ## 许可证
 
-MIT License，见 [LICENSE](LICENSE)。
+MIT License

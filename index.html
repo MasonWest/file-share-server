@@ -3,144 +3,158 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>文件共享面板</title>
+  <title>文件分享面板</title>
   <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-100 p-6">
-  <div id="app" class="max-w-4xl mx-auto bg-white shadow-xl rounded-xl p-6">
-    <h1 class="text-3xl font-bold mb-4">文件共享面板</h1>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+  <div id="app" class="min-h-screen">
+    <div class="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_35%),linear-gradient(135deg,_#020617,_#0f172a_55%,_#111827)]"></div>
 
-    <div class="mb-4 p-3 bg-gray-50 rounded-lg">
-      <div class="flex items-center space-x-1 text-sm">
-        <span @click="goToPath('')" class="cursor-pointer text-blue-600 hover:text-blue-800">根目录</span>
-        <span v-for="(part, index) in pathParts" :key="index">
-          <span class="mx-1">/</span>
-          <span
-            @click="goToPath(pathParts.slice(0, index + 1).join('/'))"
-            class="cursor-pointer text-blue-600 hover:text-blue-800"
-          >
-            {{ part }}
-          </span>
-        </span>
-      </div>
-    </div>
+    <div v-if="!authenticated" class="min-h-screen flex items-center justify-center px-4">
+      <div class="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl backdrop-blur">
+        <div class="mb-6">
+          <div class="text-sm uppercase tracking-[0.3em] text-sky-300">Private access</div>
+          <h1 class="mt-2 text-3xl font-semibold">管理员登录</h1>
+          <p class="mt-2 text-sm text-slate-400">输入 `ADMIN_TOKEN` 后才能进入管理界面。</p>
+        </div>
 
-    <div class="mb-6">
-      <input type="file" @change="selectFile" class="mb-2">
-      <button
-        @click="upload"
-        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-      >
-        上传
-      </button>
-
-      <div v-if="progress > 0" class="mt-2 bg-gray-200 rounded-lg h-2">
-        <div class="bg-blue-500 h-2 rounded-lg" :style="{ width: progress + '%' }"></div>
-      </div>
-    </div>
-
-    <div class="mb-6 p-4 bg-gray-50 rounded-lg">
-      <div class="flex items-center space-x-3">
-        <div class="relative flex-1">
+        <div class="space-y-4">
           <input
-            type="text"
-            v-model="searchQuery"
-            placeholder="搜索当前目录中的文件或文件夹..."
-            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            v-model="loginToken"
+            type="password"
+            autocomplete="current-password"
+            placeholder="请输入管理员口令"
+            class="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none ring-0 placeholder:text-slate-500 focus:border-sky-400"
+            @keyup.enter="login"
           />
+          <button
+            @click="login"
+            class="w-full rounded-xl bg-sky-500 px-4 py-3 font-medium text-slate-950 hover:bg-sky-400"
+          >
+            登录
+          </button>
+          <p v-if="authMessage" class="text-sm text-rose-300 whitespace-pre-line">{{ authMessage }}</p>
         </div>
-      </div>
-      <div v-if="searchQuery" class="mt-2 text-sm text-gray-600">
-        找到 {{ filteredFolders.length + filteredFiles.length }} 个结果
       </div>
     </div>
 
-    <h2 class="text-xl font-semibold mb-2">文件夹</h2>
-    <div class="space-y-2 mb-6">
-      <div
-        v-for="folder in filteredFolders"
-        :key="folder.path"
-        @click="goToPath(folder.path)"
-        class="flex justify-between items-center bg-blue-50 p-3 rounded-lg shadow-sm cursor-pointer hover:bg-blue-100"
-      >
+    <div v-else class="mx-auto max-w-6xl px-4 py-8">
+      <div class="mb-6 flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl backdrop-blur md:flex-row md:items-center md:justify-between">
         <div>
-          <div class="font-semibold">
-            <span v-html="highlightMatch(folder.name, searchQuery)"></span>
-          </div>
-          <div class="text-xs text-gray-500">
-            文件夹 | {{ new Date(folder.mtime * 1000).toLocaleString() }}
-          </div>
+          <div class="text-xs uppercase tracking-[0.3em] text-sky-300">File Share</div>
+          <h1 class="mt-1 text-3xl font-semibold">私人文件管理面板</h1>
+          <p class="mt-2 text-sm text-slate-400">管理接口受 `X-Admin-Token` 保护，分享链接 `/s/{token}` 不走管理员校验。</p>
         </div>
-        <div class="text-blue-600">进入</div>
+        <button @click="logout" class="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 hover:bg-slate-800">
+          退出登录
+        </button>
       </div>
-      <div v-if="filteredFolders.length === 0 && searchQuery" class="text-center py-4 text-gray-500">
-        未找到匹配的文件夹
-      </div>
-    </div>
 
-    <div class="flex justify-between items-center mb-2">
-      <h2 class="text-xl font-semibold">文件</h2>
-      <div class="flex items-center space-x-2">
-        <span class="text-sm text-gray-600">排序:</span>
-        <div class="flex space-x-1">
-          <button
-            @click="setFileSort('name')"
-            :class="fileSortBy === 'name' ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-700 border-gray-300'"
-            class="px-3 py-1 text-sm border rounded-lg hover:bg-gray-200"
-          >
-            名称 {{ fileSortBy === 'name' ? (fileSortOrder === 'asc' ? '↑' : '↓') : '' }}
-          </button>
-          <button
-            @click="setFileSort('size')"
-            :class="fileSortBy === 'size' ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-700 border-gray-300'"
-            class="px-3 py-1 text-sm border rounded-lg hover:bg-gray-200"
-          >
-            大小 {{ fileSortBy === 'size' ? (fileSortOrder === 'asc' ? '↑' : '↓') : '' }}
-          </button>
-          <button
-            @click="setFileSort('mtime')"
-            :class="fileSortBy === 'mtime' ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-700 border-gray-300'"
-            class="px-3 py-1 text-sm border rounded-lg hover:bg-gray-200"
-          >
-            修改日期 {{ fileSortBy === 'mtime' ? (fileSortOrder === 'asc' ? '↑' : '↓') : '' }}
-          </button>
+      <div class="mb-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl backdrop-blur">
+        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div class="flex-1">
+            <div class="text-sm text-slate-400">当前位置</div>
+            <div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
+              <button class="text-sky-300 hover:text-sky-200" @click="goToPath('')">根目录</button>
+              <template v-for="(part, index) in pathParts" :key="index">
+                <span class="text-slate-500">/</span>
+                <button class="text-sky-300 hover:text-sky-200" @click="goToPath(pathParts.slice(0, index + 1).join('/'))">
+                  {{ part }}
+                </button>
+              </template>
+            </div>
+          </div>
+          <div class="text-sm text-slate-400" v-if="currentPath">目录: {{ currentPath }}</div>
         </div>
       </div>
-    </div>
 
-    <div class="space-y-2">
-      <div
-        v-for="file in filteredFiles"
-        :key="file.path"
-        class="flex justify-between items-center bg-gray-50 p-3 rounded-lg shadow-sm"
-      >
-        <div>
-          <div class="font-semibold">
-            <span v-html="highlightMatch(file.name, searchQuery)"></span>
-          </div>
-          <div class="text-xs text-gray-500">
-            {{ (file.size / 1024).toFixed(1) }} KB |
-            {{ new Date(file.mtime * 1000).toLocaleString() }}
+      <div class="grid gap-6 lg:grid-cols-2">
+        <div class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl backdrop-blur">
+          <h2 class="text-lg font-semibold">上传文件</h2>
+          <div class="mt-4 space-y-3">
+            <input type="file" @change="selectFile" class="block w-full text-sm text-slate-300 file:mr-4 file:rounded-lg file:border-0 file:bg-sky-500 file:px-4 file:py-2 file:font-medium file:text-slate-950 hover:file:bg-sky-400" />
+            <button @click="upload" class="rounded-xl bg-emerald-500 px-4 py-2 font-medium text-slate-950 hover:bg-emerald-400">上传</button>
+            <div v-if="progress > 0" class="h-2 overflow-hidden rounded-full bg-slate-800">
+              <div class="h-full bg-sky-400 transition-all" :style="{ width: progress + '%' }"></div>
+            </div>
           </div>
         </div>
-        <div class="flex items-center space-x-2">
-          <button
-            @click="createShareLink(file.path)"
-            class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-          >
-            分享链接
-          </button>
-          <button
-            @click="download(file.path)"
-            class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"
-          >
-            下载
-          </button>
+
+        <div class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl backdrop-blur">
+          <h2 class="text-lg font-semibold">搜索与排序</h2>
+          <div class="mt-4 space-y-3">
+            <input
+              v-model="searchQuery"
+              type="text"
+              placeholder="搜索当前目录"
+              class="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400"
+            />
+            <div class="flex flex-wrap gap-2 text-sm">
+              <button @click="setFileSort('name')" class="rounded-lg border px-3 py-2" :class="fileSortBy === 'name' ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-slate-700 text-slate-300'">
+                名称
+              </button>
+              <button @click="setFileSort('size')" class="rounded-lg border px-3 py-2" :class="fileSortBy === 'size' ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-slate-700 text-slate-300'">
+                大小
+              </button>
+              <button @click="setFileSort('mtime')" class="rounded-lg border px-3 py-2" :class="fileSortBy === 'mtime' ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-slate-700 text-slate-300'">
+                时间
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-      <div v-if="filteredFiles.length === 0 && searchQuery" class="text-center py-4 text-gray-500">
-        未找到匹配的文件
+
+      <div class="mt-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl backdrop-blur">
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-lg font-semibold">文件夹</h2>
+          <div class="text-sm text-slate-400">共 {{ filteredFolders.length }} 个</div>
+        </div>
+        <div class="space-y-2">
+          <button
+            v-for="folder in filteredFolders"
+            :key="folder.path"
+            @click="goToPath(folder.path)"
+            class="flex w-full items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-left hover:border-sky-500/60 hover:bg-slate-900"
+          >
+            <div>
+              <div class="font-medium" v-html="highlightMatch(folder.name, searchQuery)"></div>
+              <div class="text-xs text-slate-500">修改时间: {{ new Date(folder.mtime * 1000).toLocaleString() }}</div>
+            </div>
+            <div class="text-sky-300">进入</div>
+          </button>
+          <div v-if="filteredFolders.length === 0" class="py-6 text-center text-sm text-slate-500">没有匹配的文件夹</div>
+        </div>
+      </div>
+
+      <div class="mt-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl backdrop-blur">
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-lg font-semibold">文件</h2>
+          <div class="text-sm text-slate-400">共 {{ filteredFiles.length }} 个</div>
+        </div>
+        <div class="space-y-3">
+          <div
+            v-for="file in filteredFiles"
+            :key="file.path"
+            class="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 md:flex-row md:items-center md:justify-between"
+          >
+            <div>
+              <div class="font-medium" v-html="highlightMatch(file.name, searchQuery)"></div>
+              <div class="text-xs text-slate-500">
+                {{ (file.size / 1024).toFixed(1) }} KB | {{ new Date(file.mtime * 1000).toLocaleString() }}
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button @click="createShareLink(file.path)" class="rounded-lg bg-sky-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-sky-400">
+                生成分享链接
+              </button>
+              <button @click="download(file.path)" class="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400">
+                下载
+              </button>
+            </div>
+          </div>
+          <div v-if="filteredFiles.length === 0" class="py-6 text-center text-sm text-slate-500">没有匹配的文件</div>
+        </div>
       </div>
     </div>
   </div>
@@ -158,7 +172,59 @@
         const searchQuery = ref("")
         const fileSortBy = ref("name")
         const fileSortOrder = ref("asc")
+        const authenticated = ref(false)
+        const loginToken = ref("")
+        const authMessage = ref("")
         const apiBase = `${window.location.origin}/api`
+
+        function authHeaders(extra = {}) {
+          const headers = { ...extra }
+          const token = sessionStorage.getItem("admin_token")
+          if (token) {
+            headers["X-Admin-Token"] = token
+          }
+          return headers
+        }
+
+        function clearAuth() {
+          sessionStorage.removeItem("admin_token")
+          loginToken.value = ""
+          authenticated.value = false
+          currentPath.value = ""
+          folders.value = []
+          files.value = []
+        }
+
+        async function login() {
+          authMessage.value = ""
+          const token = loginToken.value.trim()
+          if (!token) {
+            authMessage.value = "请输入管理员口令。"
+            return
+          }
+
+          const response = await fetch(`${apiBase}/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token })
+          })
+
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}))
+            authMessage.value = data.detail || `登录失败 (${response.status})`
+            return
+          }
+
+          sessionStorage.setItem("admin_token", token)
+          loginToken.value = ""
+          authenticated.value = true
+          authMessage.value = ""
+          await fetchFiles("")
+        }
+
+        function logout() {
+          clearAuth()
+        }
 
         const pathParts = computed(() => {
           return currentPath.value ? currentPath.value.split("/").filter(Boolean) : []
@@ -171,33 +237,21 @@
         const sortedFiles = computed(() => {
           return [...files.value].sort((a, b) => {
             let compareResult = 0
-
-            if (fileSortBy.value === "name") {
-              compareResult = a.name.localeCompare(b.name, "zh-CN")
-            } else if (fileSortBy.value === "size") {
-              compareResult = a.size - b.size
-            } else if (fileSortBy.value === "mtime") {
-              compareResult = a.mtime - b.mtime
-            }
-
+            if (fileSortBy.value === "name") compareResult = a.name.localeCompare(b.name, "zh-CN")
+            if (fileSortBy.value === "size") compareResult = a.size - b.size
+            if (fileSortBy.value === "mtime") compareResult = a.mtime - b.mtime
             return fileSortOrder.value === "asc" ? compareResult : -compareResult
           })
         })
 
         const filteredFolders = computed(() => {
-          if (!searchQuery.value) {
-            return sortedFolders.value
-          }
-
+          if (!searchQuery.value) return sortedFolders.value
           const query = searchQuery.value.toLowerCase()
           return sortedFolders.value.filter((folder) => folder.name.toLowerCase().includes(query))
         })
 
         const filteredFiles = computed(() => {
-          if (!searchQuery.value) {
-            return sortedFiles.value
-          }
-
+          if (!searchQuery.value) return sortedFiles.value
           const query = searchQuery.value.toLowerCase()
           return sortedFiles.value.filter((file) => file.name.toLowerCase().includes(query))
         })
@@ -207,7 +261,6 @@
             fileSortOrder.value = fileSortOrder.value === "asc" ? "desc" : "asc"
             return
           }
-
           fileSortBy.value = sortBy
           fileSortOrder.value = "asc"
         }
@@ -215,26 +268,57 @@
         function highlightMatch(text, query) {
           if (!query) return text
           const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-          const regex = new RegExp(`(${escapedQuery})`, "gi")
-          return text.replace(regex, '<span class="bg-yellow-200 font-semibold">$1</span>')
+          return text.replace(new RegExp(`(${escapedQuery})`, "gi"), '<span class="rounded bg-amber-300/80 px-0.5 text-slate-950">$1</span>')
         }
 
         async function fetchFiles(path = "") {
           const url = path ? `${apiBase}/list/${encodeURI(path)}` : `${apiBase}/list`
-          const response = await fetch(url)
+          const response = await fetch(url, { headers: authHeaders() })
+
+          if (response.status === 401 || response.status === 423) {
+            clearAuth()
+            const data = await response.json().catch(() => ({}))
+            authMessage.value = data.detail || "管理员口令无效或已被锁定。"
+            authenticated.value = false
+            return false
+          }
+
           if (!response.ok) {
             alert("读取目录失败")
-            return
+            return false
           }
 
           const data = await response.json()
           currentPath.value = data.path || ""
           folders.value = data.folders || []
           files.value = data.files || []
+          authenticated.value = true
+          return true
         }
 
         function selectFile(event) {
-          selectedFile.value = event.target.files[0]
+          selectedFile.value = event.target.files[0] || null
+        }
+
+        function downloadBlob(blob, filename) {
+          const objectUrl = URL.createObjectURL(blob)
+          const link = document.createElement("a")
+          link.href = objectUrl
+          link.download = filename
+          document.body.appendChild(link)
+          link.click()
+          link.remove()
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+        }
+
+        async function download(filepath) {
+          const response = await fetch(`${apiBase}/download/${encodeURI(filepath)}`, { headers: authHeaders() })
+          if (!response.ok) {
+            alert(`下载失败: ${await response.text()}`)
+            return
+          }
+          const filename = filepath.split("/").pop() || "download"
+          downloadBlob(await response.blob(), filename)
         }
 
         function upload() {
@@ -250,7 +334,9 @@
           const uploadUrl = currentPath.value
             ? `${apiBase}/upload?path=${encodeURIComponent(currentPath.value)}`
             : `${apiBase}/upload`
+
           xhr.open("POST", uploadUrl)
+          xhr.setRequestHeader("X-Admin-Token", sessionStorage.getItem("admin_token") || "")
 
           xhr.upload.onprogress = (event) => {
             if (event.lengthComputable) {
@@ -258,34 +344,24 @@
             }
           }
 
-          xhr.onload = () => {
+          xhr.onload = async () => {
             progress.value = 0
             if (xhr.status === 200) {
-              fetchFiles(currentPath.value)
+              await fetchFiles(currentPath.value)
               alert("上传成功")
               return
             }
-
             alert(`上传失败: ${xhr.responseText}`)
           }
 
           xhr.send(formData)
         }
 
-        function download(filepath) {
-          window.open(`${apiBase}/download/${encodeURI(filepath)}`)
-        }
-
         async function createShareLink(filepath) {
           const response = await fetch(`${apiBase}/share-link`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              filepath,
-              expire_seconds: 3600
-            })
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ filepath, expire_seconds: 3600 })
           })
 
           if (!response.ok) {
@@ -308,27 +384,39 @@
           fetchFiles(path)
         }
 
-        fetchFiles()
+        const storedToken = sessionStorage.getItem("admin_token")
+        if (storedToken) {
+          fetchFiles().then((ok) => {
+            if (!ok) {
+              clearAuth()
+            }
+          })
+        }
 
         return {
           currentPath,
           folders,
           files,
-          filteredFolders,
-          filteredFiles,
+          selectedFile,
+          progress,
           searchQuery,
           fileSortBy,
           fileSortOrder,
+          authenticated,
+          loginToken,
+          authMessage,
           pathParts,
-          selectedFile,
-          progress,
+          filteredFolders,
+          filteredFiles,
           selectFile,
           upload,
           download,
           createShareLink,
           goToPath,
           setFileSort,
-          highlightMatch
+          highlightMatch,
+          login,
+          logout
         }
       }
     }).mount("#app")
