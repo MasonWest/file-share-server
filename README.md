@@ -45,6 +45,8 @@ ALLOW_OVERWRITE=false
 
 # 链接配置
 TOKEN_EXPIRE_HOURS=24  # 分享链接默认有效期（小时）
+# 同一链接最大下载次数
+MAX_DOWNLOADS=10
 ```
 
 ### 3. 启动服务
