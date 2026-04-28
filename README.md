@@ -1,4 +1,4 @@
-# 局域网和公网分离文件共享服务
+# Share files without exposing your system.
 
 ![Python](https://img.shields.io/badge/Python-3.7+-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.124.2-green)
