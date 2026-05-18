@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
+import asyncio
 from datetime import datetime, timedelta, timezone
 import hmac
+import json
 import os
 from pathlib import Path
 from secrets import token_hex
 from threading import Lock
 from typing import Dict
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, HTMLResponse
@@ -34,8 +38,12 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://221.11.22.70:9900").rstri
 DEFAULT_TOKEN_EXPIRE_HOURS = int(os.getenv("TOKEN_EXPIRE_HOURS", "24"))
 DEFAULT_SHARE_EXPIRE_SECONDS = DEFAULT_TOKEN_EXPIRE_HOURS * 3600
 MAX_SHARE_EXPIRE_SECONDS = 7 * 24 * 3600
+MAX_DOWNLOADS = int(os.getenv("MAX_DOWNLOADS", "100"))
 MAX_FAILED_LOGIN_ATTEMPTS = 3
 ADMIN_LOCKOUT_SECONDS = 24 * 3600
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL") or "").rstrip("/")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY") or ""
+SUPABASE_CLIPS_TABLE = os.getenv("SUPABASE_CLIPS_TABLE", "clips")
 
 share_tokens: Dict[str, dict] = {}
 share_tokens_lock = Lock()
@@ -49,6 +57,10 @@ class ShareLinkRequest(BaseModel):
         default=DEFAULT_SHARE_EXPIRE_SECONDS,
         ge=1,
         le=MAX_SHARE_EXPIRE_SECONDS,
+    )
+    max_downloads: int | None = Field(
+        default=MAX_DOWNLOADS,
+        ge=1,
     )
 
 
@@ -177,6 +189,32 @@ def cleanup_expired_tokens(now: datetime | None = None) -> None:
             share_tokens.pop(token, None)
 
 
+def sync_share_link_to_supabase(share_url: str, expires_at: datetime) -> None:
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        return
+
+    endpoint = f"{SUPABASE_URL}/rest/v1/{SUPABASE_CLIPS_TABLE}"
+    payload = {
+        "content": share_url,
+        "expires_at": expires_at.isoformat(),
+    }
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    req = urlrequest.Request(endpoint, data=data, headers=headers, method="POST")
+
+    try:
+        with urlrequest.urlopen(req, timeout=10) as response:
+            if response.status not in (200, 201, 204):
+                raise RuntimeError(f"unexpected status {response.status}")
+    except (urlerror.HTTPError, urlerror.URLError, TimeoutError, RuntimeError) as exc:
+        print(f"[WARN] Failed to sync share link to Supabase: {exc}")
+
+
 def create_internal_app() -> FastAPI:
     app = FastAPI()
 
@@ -287,7 +325,7 @@ def create_internal_app() -> FastAPI:
         return {"uploaded": safe_name, "path": path}
 
     @app.post("/api/share-link")
-    async def create_share_link(payload: ShareLinkRequest):
+    async def create_share_link(payload: ShareLinkRequest, background_tasks: BackgroundTasks):
         file_path = resolve_safe_path(payload.filepath)
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(404, "File not found.")
@@ -300,14 +338,19 @@ def create_internal_app() -> FastAPI:
             share_tokens[token] = {
                 "file_path": file_path,
                 "expires_at": expires_at,
+                "max_downloads": payload.max_downloads,
                 "download_count": 0,
                 "downloads": [],
             }
 
+        share_url = f"{PUBLIC_BASE_URL}/s/{token}"
+
+        background_tasks.add_task(sync_share_link_to_supabase, share_url, expires_at)
+
         return {
             "token": token,
             "expires_at": expires_at.isoformat(),
-            "download_url": f"{PUBLIC_BASE_URL}/s/{token}",
+            "download_url": share_url,
         }
 
     @app.get("/api/shares")
@@ -320,6 +363,7 @@ def create_internal_app() -> FastAPI:
                     "token": token,
                     "filepath": relative_path_for_response(payload["file_path"]),
                     "expires_at": payload["expires_at"].isoformat(),
+                    "max_downloads": payload["max_downloads"],
                     "download_count": payload["download_count"],
                     "downloads": payload["downloads"],
                 })
@@ -348,6 +392,16 @@ def create_public_app() -> FastAPI:
             if not payload:
                 raise HTTPException(404, "Share link not found.")
 
+            # Check max downloads
+            if payload["download_count"] >= payload["max_downloads"]:
+                share_tokens.pop(token, None) # Invalidate token
+                raise HTTPException(404, "Share link not found or download limit reached.")
+
+            # Check expiration (moved inside lock)
+            if payload["expires_at"] <= now:
+                share_tokens.pop(token, None)
+                raise HTTPException(404, "Share link not found.")
+
             # Update stats
             payload["download_count"] += 1
             payload["downloads"].append({
@@ -358,15 +412,13 @@ def create_public_app() -> FastAPI:
             if len(payload["downloads"]) > 10:
                 payload["downloads"].pop(0)
 
+            # Re-assign the updated payload back to share_tokens
+            share_tokens[token] = payload
+
             file_path = payload["file_path"]
-            expires_at = payload["expires_at"]
+            download_count = payload["download_count"]
 
-        print(f"[DOWNLOAD] {now.strftime('%Y-%m-%d %H:%M:%S')} | Token: {token} | IP: {client_ip} | File: {file_path.name} | Total: {payload['download_count']}")
-
-        if expires_at <= now:
-            with share_tokens_lock:
-                share_tokens.pop(token, None)
-            raise HTTPException(404, "Share link not found.")
+        print(f"[DOWNLOAD] {now.strftime('%Y-%m-%d %H:%M:%S')} | Token: {token} | IP: {client_ip} | File: {file_path.name} | Total: {download_count}")
 
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(404, "File not found.")
