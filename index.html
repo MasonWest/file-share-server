@@ -16,7 +16,7 @@
         <div class="mb-6">
           <div class="text-sm uppercase tracking-[0.3em] text-sky-300">Private access</div>
           <h1 class="mt-2 text-3xl font-semibold">管理员登录</h1>
-          <p class="mt-2 text-sm text-slate-400">输入 `ADMIN_TOKEN` 后才能进入管理界面。</p>
+          <p class="mt-2 text-sm text-slate-400">输入口令后才能进入管理界面。</p>
         </div>
 
         <div class="space-y-4">
@@ -157,6 +157,58 @@
         </div>
       </div>
     </div>
+
+    <div
+      v-if="shareDialog.open"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 backdrop-blur-sm"
+      @click.self="closeShareDialog"
+    >
+      <div class="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h2 class="text-lg font-semibold">分享链接已生成</h2>
+            <p class="mt-1 text-sm text-slate-400">
+              请复制下面的链接，或点击右侧按钮直接复制。
+            </p>
+          </div>
+          <button @click="closeShareDialog" class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:border-slate-500 hover:bg-slate-800">
+            关闭
+          </button>
+        </div>
+
+        <div class="mt-4 space-y-3">
+          <div class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2">
+            <input
+              ref="shareUrlInput"
+              v-model="shareDialog.url"
+              type="text"
+              readonly
+              class="w-full bg-transparent text-sm text-slate-100 outline-none"
+              @focus="selectShareUrl"
+            />
+          </div>
+
+          <p class="text-sm" :class="shareDialog.copied ? 'text-emerald-300' : 'text-slate-500'">
+            {{ shareDialog.copied ? '链接已复制到剪贴板。' : '如果自动复制失败，可以直接选中文本复制。' }}
+          </p>
+
+          <div class="flex flex-wrap gap-2">
+            <button
+              @click="copyShareUrl"
+              class="rounded-xl bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-sky-400"
+            >
+              复制链接
+            </button>
+            <button
+              @click="closeShareDialog"
+              class="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 hover:bg-slate-800"
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -175,6 +227,12 @@
         const authenticated = ref(false)
         const loginToken = ref("")
         const authMessage = ref("")
+        const shareDialog = ref({
+          open: false,
+          url: "",
+          copied: false,
+        })
+        const shareUrlInput = ref(null)
         const apiBase = `${window.location.origin}/api`
 
         function authHeaders(extra = {}) {
@@ -300,6 +358,52 @@
           selectedFile.value = event.target.files[0] || null
         }
 
+        function selectShareUrl() {
+          if (shareUrlInput.value) {
+            shareUrlInput.value.select()
+            shareUrlInput.value.setSelectionRange(0, shareUrlInput.value.value.length)
+          }
+        }
+
+        async function copyShareUrl() {
+          if (!shareDialog.value.url) {
+            return
+          }
+
+          try {
+            selectShareUrl()
+            const copied = document.execCommand("copy")
+            if (copied) {
+              shareDialog.value.copied = true
+              return
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              await navigator.clipboard.writeText(shareDialog.value.url)
+              shareDialog.value.copied = true
+              return
+            }
+            throw new Error("Copy failed")
+          } catch (error) {
+            selectShareUrl()
+            shareDialog.value.copied = false
+          }
+        }
+
+        function openShareDialog(url) {
+          shareDialog.value.open = true
+          shareDialog.value.url = url
+          shareDialog.value.copied = false
+          setTimeout(() => {
+            selectShareUrl()
+          }, 0)
+        }
+
+        function closeShareDialog() {
+          shareDialog.value.open = false
+          shareDialog.value.url = ""
+          shareDialog.value.copied = false
+        }
+
         function downloadBlob(blob, filename) {
           const objectUrl = URL.createObjectURL(blob)
           const link = document.createElement("a")
@@ -371,13 +475,7 @@
 
           const data = await response.json()
           const shareUrl = new URL(data.download_url, window.location.origin).toString()
-
-          try {
-            await navigator.clipboard.writeText(shareUrl)
-            alert(`分享链接已复制到剪贴板:\n${shareUrl}`)
-          } catch (error) {
-            alert(`分享链接生成成功，请手动复制:\n${shareUrl}`)
-          }
+          openShareDialog(shareUrl)
         }
 
         function goToPath(path) {
@@ -405,10 +503,16 @@
           authenticated,
           loginToken,
           authMessage,
+          shareDialog,
+          shareUrlInput,
           pathParts,
           filteredFolders,
           filteredFiles,
           selectFile,
+          selectShareUrl,
+          copyShareUrl,
+          openShareDialog,
+          closeShareDialog,
           upload,
           download,
           createShareLink,

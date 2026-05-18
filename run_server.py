@@ -22,6 +22,7 @@ def build_server(app_path: str, host: str, port: int) -> uvicorn.Server:
         port=port,
         reload=False,
         log_level="info",
+        workers=1,
     )
     return uvicorn.Server(config)
 
