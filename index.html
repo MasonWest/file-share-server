@@ -148,8 +148,13 @@
               <button @click="createShareLink(file.path)" class="rounded-lg bg-sky-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-sky-400">
                 生成分享链接
               </button>
-              <button @click="download(file.path)" class="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400">
-                下载
+              <button 
+                @click="download(file.path)" 
+                :disabled="isDownloading"
+                class="rounded-lg px-3 py-2 text-sm font-medium transition-all"
+                :class="isDownloading ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'"
+              >
+                {{ isDownloading ? '正在准备...' : '下载' }}
               </button>
             </div>
           </div>
@@ -404,25 +409,32 @@
           shareDialog.value.copied = false
         }
 
-        function downloadBlob(blob, filename) {
-          const objectUrl = URL.createObjectURL(blob)
-          const link = document.createElement("a")
-          link.href = objectUrl
-          link.download = filename
-          document.body.appendChild(link)
-          link.click()
-          link.remove()
-          setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
-        }
+        const isDownloading = ref(false)
 
         async function download(filepath) {
-          const response = await fetch(`${apiBase}/download/${encodeURI(filepath)}`, { headers: authHeaders() })
-          if (!response.ok) {
-            alert(`下载失败: ${await response.text()}`)
-            return
+          if (isDownloading.value) return
+          isDownloading.value = true
+
+          try {
+            // 关键：让浏览器原生发起下载（直接导航），由浏览器下载管理器
+            // 实时显示进度条。不能再走 fetch().blob()——那会把整文件先缓冲进
+            // 内存，导致“等十几秒才弹进度、然后秒好”。
+            // 鉴权 token 通过 ?token= 传入（浏览器原生下载无法带自定义请求头）。
+            const token = sessionStorage.getItem("admin_token") || ""
+            const url = `${apiBase}/download/${encodeURI(filepath)}?token=${encodeURIComponent(token)}`
+            const filename = filepath.split("/").pop() || "download"
+            const link = document.createElement("a")
+            link.href = url
+            link.download = filename
+            document.body.appendChild(link)
+            link.click()
+            link.remove()
+          } catch (err) {
+            alert(`下载出错: ${err.message}`)
+          } finally {
+            // 原生下载由浏览器接管，这里仅短暂占位后释放按钮
+            setTimeout(() => { isDownloading.value = false }, 1500)
           }
-          const filename = filepath.split("/").pop() || "download"
-          downloadBlob(await response.blob(), filename)
         }
 
         function upload() {
@@ -520,7 +532,8 @@
           setFileSort,
           highlightMatch,
           login,
-          logout
+          logout,
+          isDownloading
         }
       }
     }).mount("#app")

@@ -1,4 +1,4 @@
-# Personal file sharing and clipboard access gateway
+﻿# Personal file sharing and clipboard access gateway
 
 ![Python](https://img.shields.io/badge/Python-3.7+-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.124.2-green)
@@ -51,6 +51,12 @@ ALLOW_OVERWRITE=false
 TOKEN_EXPIRE_HOURS=24  # 分享链接默认有效期（小时）
 # 同一链接最大下载次数
 MAX_DOWNLOADS=10   #限制服务端实际处理的下载请求次数（不包含浏览器缓存命中）
+
+# Supabase 配置
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_CLIPS_TABLE=clips
+
 ```
 
 ### 3. 启动服务

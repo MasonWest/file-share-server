@@ -11,6 +11,7 @@ from typing import Dict
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
+import pymysql
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi import Request
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field
 
 
 load_dotenv()
+load_dotenv("mysql.env")
 
 SHARE_DIR = os.getenv("SHARE_DIR", "shared")
 BASE_DIR = Path(SHARE_DIR).resolve()
@@ -41,9 +43,14 @@ MAX_SHARE_EXPIRE_SECONDS = 7 * 24 * 3600
 MAX_DOWNLOADS = int(os.getenv("MAX_DOWNLOADS", "100"))
 MAX_FAILED_LOGIN_ATTEMPTS = 3
 ADMIN_LOCKOUT_SECONDS = 24 * 3600
-SUPABASE_URL = (os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL") or "").rstrip("/")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY") or ""
-SUPABASE_CLIPS_TABLE = os.getenv("SUPABASE_CLIPS_TABLE", "clips")
+
+# MySQL Configuration
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "supabase")
+MYSQL_CLIPS_TABLE = os.getenv("MYSQL_CLIPS_TABLE", "clips")
 
 share_tokens: Dict[str, dict] = {}
 share_tokens_lock = Lock()
@@ -136,7 +143,9 @@ def check_admin_lockout(request: Request) -> JSONResponse | None:
 
 
 def check_admin_token(request: Request) -> JSONResponse | None:
-    provided_token = request.headers.get("X-Admin-Token")
+    # 优先读请求头（前端 API 调用用）；浏览器原生下载无法带自定义请求头，
+    # 故同时支持 ?token= 查询参数（与应用内分享链接把 token 放 URL 的模式一致）。
+    provided_token = request.headers.get("X-Admin-Token") or request.query_params.get("token")
     if not provided_token:
         return build_unauthorized_response()
 
@@ -189,30 +198,24 @@ def cleanup_expired_tokens(now: datetime | None = None) -> None:
             share_tokens.pop(token, None)
 
 
-def sync_share_link_to_supabase(share_url: str, expires_at: datetime) -> None:
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        return
-
-    endpoint = f"{SUPABASE_URL}/rest/v1/{SUPABASE_CLIPS_TABLE}"
-    payload = {
-        "content": share_url,
-        "expires_at": expires_at.isoformat(),
-    }
-    data = json.dumps(payload).encode("utf-8")
-    headers = {
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal",
-    }
-    req = urlrequest.Request(endpoint, data=data, headers=headers, method="POST")
-
+def sync_share_link_to_mysql(share_url: str, expires_at: datetime) -> None:
     try:
-        with urlrequest.urlopen(req, timeout=10) as response:
-            if response.status not in (200, 201, 204):
-                raise RuntimeError(f"unexpected status {response.status}")
-    except (urlerror.HTTPError, urlerror.URLError, TimeoutError, RuntimeError) as exc:
-        print(f"[WARN] Failed to sync share link to Supabase: {exc}")
+        connection = pymysql.connect(
+            host=MYSQL_HOST,
+            port=MYSQL_PORT,
+            user=MYSQL_USER,
+            password=MYSQL_PASSWORD,
+            database=MYSQL_DATABASE,
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+        with connection.cursor() as cursor:
+            now = datetime.now(timezone.utc)
+            sql = f"INSERT INTO `{MYSQL_CLIPS_TABLE}` (content, expires_at, type, created_at) VALUES (%s, %s, %s, %s)"
+            cursor.execute(sql, (share_url, expires_at, "text", now))
+        connection.commit()
+        connection.close()
+    except Exception as exc:
+        print(f"[WARN] Failed to sync share link to MySQL: {exc}")
 
 
 def create_internal_app() -> FastAPI:
@@ -318,9 +321,14 @@ def create_internal_app() -> FastAPI:
         if not ALLOW_OVERWRITE and target_file.exists():
             raise HTTPException(400, "Overwrite disabled.")
 
+        # 分块写入：每次只把 1MB 读入内存，避免大文件一次性占满服务器内存
+        chunk_size = 1024 * 1024
         with open(target_file, "wb") as output:
-            content = await file.read()
-            output.write(content)
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                output.write(chunk)
 
         return {"uploaded": safe_name, "path": path}
 
@@ -345,7 +353,7 @@ def create_internal_app() -> FastAPI:
 
         share_url = f"{PUBLIC_BASE_URL}/s/{token}"
 
-        background_tasks.add_task(sync_share_link_to_supabase, share_url, expires_at)
+        background_tasks.add_task(sync_share_link_to_mysql, share_url, expires_at)
 
         return {
             "token": token,
