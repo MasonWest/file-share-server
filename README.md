@@ -1,117 +1,195 @@
-﻿# Personal file sharing and clipboard access gateway
+﻿# file-share-server
 
-![Python](https://img.shields.io/badge/Python-3.7+-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.124.2-green)
-![Vue.js](https://img.shields.io/badge/Vue.js-3-brightgreen)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+个人文件分享服务：把本机目录里的文件生成带 Token 的临时下载链接，同时把链接推送进 [`Vclip`](https://github.com/MasonWest/Vclip) 剪贴板，让手机、VR 头显等设备可以立刻拿到。
 
-这是一个面向个人使用的文件分享管理系统，并与 [`Vclip`](https://github.com/MasonWest/Vclip) 联动，作为跨设备访问剪切板内容的浏览器入口。
+管理面和下载面跑在**两个不同端口**上，从物理层面隔离权限。
 
-它将管理权限与公共下载彻底分离，方便你在不同设备上通过浏览器快速访问需要分享或同步的内容：
+| 端口 | 默认值 | 暴露范围 | 能力 |
+|---|---|---|---|
+| 管理端 | `8800` | 仅内网/本机 | 文件浏览、上传、下载、生成分享链接、查看下载统计 |
+| 公共端 | `9900` | 可映射公网 | 只有 `/s/{token}` 可以下载，其余一律 `403` |
 
-- **管理端 (默认 8800)**：提供完整的管理功能，受 Token 保护，建议仅限内网/本机访问。
-- **公共下载端 (默认 9900)**：**极简暴露**，仅提供 `/s/{token}` 下载接口，无任何管理权限，适合直接映射到公网。
-- **Vclip 联动**：分享链接可以作为跨设备访问剪切板内容的入口，适合在电脑、手机等设备间随时查看和复制内容。
+公网只会看到一个「给链接就能下载，不给链接什么都不知道」的端口。文件列表、上传能力全部留在内网端口。
 
-## 功能特性
+前端是单文件 `index.html`，用 Vue 3 的 CDN 全局构建，无打包步骤。
 
-- **双重隔离**：物理端口隔离管理流与下载流。
-- **文件管理**：浏览目录、子目录、文件上传、下载、删除（需权限）。
-- **实时搜索**：当前目录内快速过滤。
-- **临时分享**：一键生成带 Token 的临时下载链接。
-- **剪切板入口**：通过分享链接联动 Vclip，提供跨设备访问能力。
-- **🔥 增强统计**：
-  - **实时日志**：控制台实时打印下载动作（包含 IP、文件、Token）。
-  - **次数统计**：记录每个分享链接的累计下载次数。
-  - **下载轨迹**：内存保留最近 10 次下载的详细 IP 和时间戳。
-- **路径安全**：严格校验 `..` 穿越和绝对路径，禁止越界访问。
+## 功能
+
+- **双端口隔离**：管理流与下载流分离，9900 端口无任何管理接口
+- **文件管理**：浏览目录、进入子目录、上传（1MB 分块写入并显示进度）、下载
+- **临时分享**：生成一次性 Token 链接，可限制有效期和下载次数
+- **下载统计**：累计下载次数 + 最近 10 次下载的 IP 与时间戳
+- **实时日志**：控制台打印每次下载的 IP、Token、文件名
+- **Vclip 联动**：分享链接生成后自动写入剪贴板（见下文）
+- **路径安全**：绝对路径和 `..` 穿越一律拒绝，所有操作限制在 `SHARE_DIR` 内
+- **防爆破**：管理 Token 连续错误 3 次，该 IP 锁定 24 小时
+
+## 环境要求
+
+- **Python 3.10 或以上**。代码用到了 `int | None` 联合类型语法，3.9 及以下会直接语法报错。
+- 无需数据库。分享 Token 和登录状态都存在内存里。
 
 ## 快速开始
 
-### 1. 安装依赖
-
 ```bash
+# 1. 安装依赖
 pip install -r requirements.txt
-```
 
-### 2. 环境配置
+# 2. 配置
+cp .env.example .env
+# 编辑 .env：至少改 SHARE_DIR、ADMIN_TOKEN、PUBLIC_BASE_URL、VCLIP_ACCESS_PASSWORD
 
-复制 `.env.example` 为 `.env`，并按需修改：
-
-```env
-# 基础配置
-SHARE_DIR=D:\SharedFiles
-ADMIN_TOKEN=your_secure_password_here
-
-# 网络配置
-PUBLIC_BASE_URL=http://example.com:9900  # 必须包含协议头和端口，例如：http://your-domain.com:9900
-ALLOW_OVERWRITE=false
-
-# 链接配置
-TOKEN_EXPIRE_HOURS=24  # 分享链接默认有效期（小时）
-# 同一链接最大下载次数
-MAX_DOWNLOADS=10   #限制服务端实际处理的下载请求次数（不包含浏览器缓存命中）
-
-# Supabase 配置
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_CLIPS_TABLE=clips
-
-```
-
-### 3. 启动服务
-
-Windows 环境：
-```bat
-start_server.bat
-```
-
-通用方式：
-```bash
+# 3. 启动
 python run_server.py
 ```
 
-## 访问说明
+Windows 也可以直接双击 `start_server.bat`（会先检查 `python` 是否在 PATH 中）。
 
-### 管理界面 (Admin)
-- **地址**：默认 `http://127.0.0.1:8800`
-- **认证**：首次进入需输入 `.env` 中配置的 `ADMIN_TOKEN`。
-- **统计查看**：后端提供 `/api/shares` 接口供管理员查看当前所有活跃链接及其下载统计。
+启动后会打印两个端口的访问地址。管理端首次访问需要输入 `.env` 里的 `ADMIN_TOKEN`。
 
-### 下载服务 (Public)
-- **地址**：默认 `http://0.0.0.0:9900`
-- **权限**：仅允许 `/s/{token}`。任何试图访问根目录、管理 API 或非法路径的行为均返回 `403 Forbidden`。
+## 环境变量
 
-## 分享链接机制
+| 变量 | 必填 | 默认值 | 说明 |
+|---|---|---|---|
+| `SHARE_DIR` | 是 | `shared` | 被分享的根目录，所有文件操作限制在此目录内 |
+| `ADMIN_TOKEN` | 是 | 无 | 管理端登录口令。缺失会直接启动失败 |
+| `PUBLIC_BASE_URL` | 是 | `http://221.11.22.70:9900` | 生成分享链接的域名前缀，**必须带协议和端口** |
+| `ADMIN_HOST` / `ADMIN_PORT` | 否 | `0.0.0.0` / `8800` | 管理端监听地址与端口 |
+| `PUBLIC_HOST` / `PUBLIC_PORT` | 否 | `0.0.0.0` / `9900` | 公共端监听地址与端口 |
+| `TOKEN_EXPIRE_HOURS` | 否 | `24` | 分享链接默认有效期（小时） |
+| `MAX_DOWNLOADS` | 否 | `100` | 单个链接的默认最大下载次数 |
+| `ALLOW_OVERWRITE` | 否 | `false` | 上传时是否允许覆盖同名文件 |
+| `VCLIP_API_URL` | 否 | `http://127.0.0.1:4173/api/clips` | Vclip 的写入接口 |
+| `VCLIP_ACCESS_PASSWORD` | 否 | 空 | Vclip 的 `ACCESS_PASSWORD`，不一致会被 401 拒绝 |
+| `VCLIP_TIMEOUT_SECONDS` | 否 | `5` | 推送 Vclip 的超时时间 |
 
-- **生成**：管理端点击“分享链接”生成。
-- **地址格式**：`{PUBLIC_BASE_URL}/s/{token}`
-- **有效期**：由 `TOKEN_EXPIRE_HOURS` 控制，默认 24 小时。
-- **持久性**：Token 存储在内存中，**服务重启后会失效**。
+兼容说明：`ADMIN_TOKEN` 与 `admin_token` 都能识别（历史遗留），推荐用大写形式。
 
-## 安全与约束
+## 接口
 
-1. **零越界**：所有操作限制在 `SHARE_DIR` 及其子目录下。
-2. **防爆破**：管理 Token 错误多次后会触发 IP 临时锁定（24小时）。
-3. **公网友好**：9900 端口即使映射到公网，攻击者也无法通过该端口探测文件列表或上传文件。
+### 管理端（8800）
+
+除 `/` 和 `/api/auth/login` 外，所有 `/api/*` 都需要携带 Token：请求头 `X-Admin-Token: <token>`，或查询参数 `?token=<token>`（浏览器原生下载无法带自定义请求头，故支持后者）。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/auth/login` | 校验 Token，成功返回 `{"ok": true}` |
+| `GET` | `/api/list` | 列出根目录 |
+| `GET` | `/api/list/{path}` | 列出子目录 |
+| `POST` | `/api/upload?path=` | 上传文件（multipart） |
+| `GET` | `/api/download/{filepath}` | 下载文件（需鉴权） |
+| `POST` | `/api/share-link` | 生成分享链接 |
+| `GET` | `/api/shares` | 查看所有活跃链接及下载统计 |
+
+生成分享链接：
+
+```bash
+curl -X POST http://127.0.0.1:8800/api/share-link \
+  -H "X-Admin-Token: 你的管理口令" \
+  -H "Content-Type: application/json" \
+  -d '{"filepath":"照片/1.jpg","expire_seconds":86400,"max_downloads":5}'
+```
+
+```json
+{
+  "token": "a1b2c3...",
+  "expires_at": "2026-10-29T08:38:33+00:00",
+  "download_url": "http://your-domain:9900/s/a1b2c3..."
+}
+```
+
+`expire_seconds` 上限 7 天（`604800`），超出会被 Pydantic 校验拒绝。
+
+### 公共端（9900）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/s/{token}` | 按 Token 下载文件 |
+
+其他任何路径返回 `403`。下载时会依次检查：链接是否存在、下载次数是否超限、是否已过期。超限或过期会**立即销毁 Token**。
 
 ## Vclip 联动
 
-- 这个项目的一个核心用途，是给 [`Vclip`](https://github.com/MasonWest/Vclip) 提供可从浏览器访问的入口。
-- 你可以把需要跨设备查看的内容通过分享链接暴露出来，再在其他设备上直接访问。
-- 当前仓库主要按个人自用场景维护，默认假设只有你自己会使用这些入口和管理功能。
+### 行为
+
+调用 `POST /api/share-link` 生成链接时，服务会通过 FastAPI 的 `BackgroundTasks` 把链接异步推送到 Vclip，**不阻塞接口响应**。
+
+- 推送的是 `download_url`，也就是收件人最终访问的那个地址
+- 有效期跟着分享链接走（最多 7 天），而不是 Vclip 默认的 24 小时
+- 推送失败只在控制台打印 `[WARN]`，**不影响分享链接本身的生成**
+
+触发时机是「生成链接那一刻」，与「点击复制按钮」无关。
+
+### 实现方式
+
+走 HTTP 接口，用 Python 标准库 `urllib`，**不引入额外依赖**：
+
+```
+POST {VCLIP_API_URL}
+Authorization: Basic base64("vclip:<VCLIP_ACCESS_PASSWORD>")
+Content-Type: application/json
+
+{"content": "http://.../s/<token>", "expires_at": "2026-11-04T08:38:33.930Z"}
+```
+
+### 为什么不再直连数据库
+
+历史上有三个版本：
+
+| 时间 | 方案 |
+|---|---|
+| 最初 | 直连 Supabase（anon key + `clips` 表） |
+| 2026-06 | `pymysql` 直连 MySQL 的 `clips` 表 |
+| 2026-10 | Vclip 迁移到本地 SQLite，改为调用 HTTP API（当前） |
+
+SQLite 是进程内嵌入式数据库，`.db` 文件由 Vclip 的 `server.mjs` 独占持有。让 Python 再开一个连接写同一个文件，在 WAL 模式下勉强可行，但会把两个项目死死绑在同一个存储实现上——Vclip 以后再换存储，这里还得跟着改。
+
+HTTP 接口才是稳定契约：Vclip 内部怎么存，这里不需要知道，也永远不会去碰它的数据文件。
+
+### 部署前提
+
+- **两个服务跑在同一台机器上**时，`127.0.0.1` 直接可用，无需额外配置。
+- 如果分处两台机器，`VCLIP_API_URL` 要改成 Vclip 所在机器的内网地址（如 `http://192.168.1.10:4173/api/clips`），并放行对应端口。
+- **Vclip 必须先启动**，否则推送只会打印 WARN。分享功能本身不受影响。
+- `VCLIP_ACCESS_PASSWORD` 必须与 Vclip 的 `ACCESS_PASSWORD` 完全一致，否则返回 `401`，日志会明确提示检查这一项。
+
+## 安全模型
+
+| 层面 | 措施 |
+|---|---|
+| 管理端认证 | Token 校验用 `hmac.compare_digest` 做常量时间比较，避免时序侧信道 |
+| 防爆破 | 连续 3 次错误锁定该 IP 24 小时，成功登录后清零 |
+| 公网暴露面 | 9900 端口只认 `/s/{token}`，无文件列表、无上传、无管理接口 |
+| 路径穿越 | `resolve()` 后再校验是否仍在 `BASE_DIR` 内，绝对路径直接拒绝 |
+| 下载限制 | Token 可设有效期与最大下载次数，超限即销毁 |
+
+需要注意：
+
+- **分享 Token 存在内存里，服务重启后全部失效**，这是设计取舍而非缺陷——换来的是零持久化依赖。如果重启后需要链接继续可用，得改造为写文件或数据库。
+- **对外暴露 9900 请套 HTTPS**。Token 在 URL 路径里，明文 HTTP 会进各种中间日志。
+- 管理端 `8800` 建议只绑内网，或至少不要直接映射到公网。
 
 ## 项目结构
 
-```text
-fastAPI/
-├── filesvc_api.py   # 核心逻辑（Admin/Public 应用定义）
-├── index.html       # 单页管理端 UI
-├── run_server.py    # 双端口启动入口
-├── start_server.bat # Windows 快捷启动
-├── requirements.txt # 依赖列表
-└── .env             # 敏感配置
 ```
+file-share-server/
+├── filesvc_api.py       # 核心逻辑：两个 FastAPI 应用、鉴权、分享、Vclip 推送
+├── index.html           # 单页管理端 UI
+├── run_server.py        # 双端口启动入口（asyncio.gather 同时跑两个 uvicorn）
+├── start_server.bat     # Windows 快捷启动
+├── requirements.txt
+├── MIGRATION_SUMMARY.md # Vclip 联动方式变更记录
+└── .env                 # 本地配置，已 gitignore
+```
+
+`run_server.py` 启动前会检查两个端口是否被占用，冲突时直接退出并提示。
+
+## 已知限制
+
+- 分享 Token、下载统计、登录锁定状态全部在内存中，**多进程部署不共享**（`workers=1`，不要改）。
+- 上传大小没设硬上限，超大文件会长时间占用连接；需要限制请在反向代理层做。
+- 服务端没有删除路由，管理端 UI 也没有删除入口。清理文件请直接操作 `SHARE_DIR` 目录。
+- 下载响应统一为 `application/octet-stream`，浏览器一律走下载而非内联预览。
 
 ## 许可证
 
