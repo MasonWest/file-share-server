@@ -1,24 +1,36 @@
-# 迁移总结：从 Supabase 切换到 MySQL
+# Vclip 联动方式变更记录
 
-## 已完成的变更
+## 当前方案：通过 Vclip HTTP API 写入
 
-1.  **依赖库**: 在 `requirements.txt` 中添加了 `pymysql`，用于支持 MySQL 的数据库连接。
-2.  **配置更新**:
-    *   在 `.env.example` 中，将 `SUPABASE_*` 相关的环境变量替换为了 `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE` 和 `MYSQL_CLIPS_TABLE`。
-3.  **逻辑实现 (`filesvc_api.py`)**:
-    *   将环境变量的读取逻辑从 Supabase 改为 MySQL。
-    *   用 `sync_share_link_to_mysql` 函数替换了原有的 `sync_share_link_to_supabase` 函数。新函数使用 `pymysql` 直接通过数据库驱动进行连接，而不是通过 HTTP 请求。
-    *   更新了 `/api/share-link` 接口中的后台任务调用，使其指向新的 MySQL 同步函数。
+Vclip 已从 MySQL 迁移到本地 SQLite，两个项目不再共享数据库，改为通过 HTTP 接口通信。
 
-## 如果日后需要切换回 Supabase，该如何操作？
+**变更内容：**
 
-如果您以后想换回 Supabase，请按照以下步骤操作：
+1.  **依赖库**：`requirements.txt` 移除 `pymysql`，改用 Python 标准库 `urllib`，无新增依赖。
+2.  **配置**：`.env` 中移除 `MYSQL_*`，新增：
+    *   `VCLIP_API_URL`：Vclip 的写入接口，默认 `http://127.0.0.1:4173/api/clips`
+    *   `VCLIP_ACCESS_PASSWORD`：必须与 Vclip 的 `.env` 里 `ACCESS_PASSWORD` 一致
+    *   `VCLIP_TIMEOUT_SECONDS`：请求超时，默认 5 秒
+3.  **逻辑（`filesvc_api.py`）**：
+    *   删除 `load_dotenv("mysql.env")` 与全部 `MYSQL_*` 常量。
+    *   `sync_share_link_to_mysql` → `sync_share_link_to_vclip`，改为 `POST {VCLIP_API_URL}`，body 为 `{"content": 分享链接, "expires_at": ISO8601}`，带 HTTP Basic Auth。
+    *   `/api/share-link` 的后台任务指向新函数。
+4.  **前提**：Vclip 的 `npm run serve`（或 `启动vclip.bat`）必须先启动，否则推送会失败——但只会在日志里打印 `[WARN]`，不影响分享链接本身的生成。
 
-1.  **依赖库**: 您可以从 `requirements.txt` 中移除 `pymysql`（当然留着也不会有影响）。
-2.  **配置更新**:
-    *   在您的 `.env` 文件中，恢复 `SUPABASE_URL`, `SUPABASE_ANON_KEY` 和 `SUPABASE_CLIPS_TABLE` 变量。
-    *   移除所有的 `MYSQL_*` 变量。
-3.  **代码逻辑**:
-    *   在 `filesvc_api.py` 中，恢复对 `SUPABASE_*` 环境变量的加载逻辑。
-    *   恢复原有的 `sync_share_link_to_supabase` 函数。
-    *   在 `create_share_link` 函数中，将后台任务的调用改回 `sync_share_link_to_supabase`。
+## 为什么不再直连数据库
+
+SQLite 是进程内嵌入式数据库，`.db` 文件由 Vclip 的 `server.mjs` 进程持有。让 Python 再开一个连接去写同一个文件，WAL 模式下勉强可行，但会把两个项目死死耦合在同一个存储实现上——Vclip 以后再换存储，这里还得跟着改一次。
+
+走 HTTP API 则是稳定契约：Vclip 内部怎么存，这边不需要知道。
+
+## 历史沿革
+
+| 时间 | 方案 |
+|---|---|
+| 最初 | 直连 Supabase（HTTP + anon key + `clips` 表） |
+| 2026-06 | 改为 `pymysql` 直连 MySQL 的 `clips` 表 |
+| 2026-10 | Vclip 迁移到 SQLite，改为调用 Vclip 的 HTTP API（当前） |
+
+## 如果要改回直连数据库
+
+不建议。若确有需要，参考 git 历史中 `sync_share_link_to_mysql` 的实现即可恢复，但需要同步处理 Vclip 侧的存储格式。

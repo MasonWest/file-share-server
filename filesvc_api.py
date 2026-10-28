@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import base64
 from datetime import datetime, timedelta, timezone
 import hmac
 import json
@@ -11,7 +12,6 @@ from typing import Dict
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-import pymysql
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi import Request
@@ -21,7 +21,6 @@ from pydantic import BaseModel, Field
 
 
 load_dotenv()
-load_dotenv("mysql.env")
 
 SHARE_DIR = os.getenv("SHARE_DIR", "shared")
 BASE_DIR = Path(SHARE_DIR).resolve()
@@ -44,13 +43,10 @@ MAX_DOWNLOADS = int(os.getenv("MAX_DOWNLOADS", "100"))
 MAX_FAILED_LOGIN_ATTEMPTS = 3
 ADMIN_LOCKOUT_SECONDS = 24 * 3600
 
-# MySQL Configuration
-MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "supabase")
-MYSQL_CLIPS_TABLE = os.getenv("MYSQL_CLIPS_TABLE", "clips")
+# Vclip Configuration（通过 HTTP API 写入，不直接访问 Vclip 的数据库）
+VCLIP_API_URL = os.getenv("VCLIP_API_URL", "http://127.0.0.1:4173/api/clips")
+VCLIP_ACCESS_PASSWORD = os.getenv("VCLIP_ACCESS_PASSWORD", "")
+VCLIP_TIMEOUT_SECONDS = float(os.getenv("VCLIP_TIMEOUT_SECONDS", "5"))
 
 share_tokens: Dict[str, dict] = {}
 share_tokens_lock = Lock()
@@ -198,24 +194,48 @@ def cleanup_expired_tokens(now: datetime | None = None) -> None:
             share_tokens.pop(token, None)
 
 
-def sync_share_link_to_mysql(share_url: str, expires_at: datetime) -> None:
+def sync_share_link_to_vclip(share_url: str, expires_at: datetime) -> None:
+    """把分享链接推送到 Vclip 剪贴板。
+
+    走 Vclip 的 HTTP API，而不是直接写它的数据库：这样 Vclip 换存储
+    （MySQL -> SQLite，或以后换别的）都不需要改这里。
+    """
+    if not VCLIP_API_URL:
+        return
+
+    expires_iso = expires_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    payload = json.dumps(
+        {"content": share_url, "expires_at": expires_iso}
+    ).encode("utf-8")
+
+    headers = {"Content-Type": "application/json"}
+    if VCLIP_ACCESS_PASSWORD:
+        credential = base64.b64encode(
+            f"vclip:{VCLIP_ACCESS_PASSWORD}".encode("utf-8")
+        ).decode("ascii")
+        headers["Authorization"] = f"Basic {credential}"
+
+    request_obj = urlrequest.Request(
+        VCLIP_API_URL,
+        data=payload,
+        headers=headers,
+        method="POST",
+    )
+
     try:
-        connection = pymysql.connect(
-            host=MYSQL_HOST,
-            port=MYSQL_PORT,
-            user=MYSQL_USER,
-            password=MYSQL_PASSWORD,
-            database=MYSQL_DATABASE,
-            cursorclass=pymysql.cursors.DictCursor,
-        )
-        with connection.cursor() as cursor:
-            now = datetime.now(timezone.utc)
-            sql = f"INSERT INTO `{MYSQL_CLIPS_TABLE}` (content, expires_at, type, created_at) VALUES (%s, %s, %s, %s)"
-            cursor.execute(sql, (share_url, expires_at, "text", now))
-        connection.commit()
-        connection.close()
+        with urlrequest.urlopen(request_obj, timeout=VCLIP_TIMEOUT_SECONDS) as response:
+            if response.status not in (200, 201):
+                print(f"[WARN] Vclip responded with status {response.status}")
+    except urlerror.HTTPError as exc:
+        if exc.code == 401:
+            print(
+                "[WARN] Vclip rejected the request (401). "
+                "Check that VCLIP_ACCESS_PASSWORD matches Vclip's ACCESS_PASSWORD."
+            )
+        else:
+            print(f"[WARN] Failed to sync share link to Vclip: HTTP {exc.code} {exc.reason}")
     except Exception as exc:
-        print(f"[WARN] Failed to sync share link to MySQL: {exc}")
+        print(f"[WARN] Failed to sync share link to Vclip: {exc}")
 
 
 def create_internal_app() -> FastAPI:
@@ -353,7 +373,7 @@ def create_internal_app() -> FastAPI:
 
         share_url = f"{PUBLIC_BASE_URL}/s/{token}"
 
-        background_tasks.add_task(sync_share_link_to_mysql, share_url, expires_at)
+        background_tasks.add_task(sync_share_link_to_vclip, share_url, expires_at)
 
         return {
             "token": token,
