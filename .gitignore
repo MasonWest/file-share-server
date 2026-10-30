@@ -50,8 +50,16 @@ Thumbs.db
 # Logs
 *.log
 
-# Test files
-test_*.py
+# 受信设备令牌（只存哈希，但也不该进仓库）
+devices.json
+devices.json.tmp
+
+# 分享链接记录（含真实文件名与下载 IP）
+shares.json
+shares.json.tmp
+
+# Test files 的旧规则已移除：
+# 原本 test_*.py 被忽略，等于给「以后补测试」设了一道隐形门槛。
 *_test.py
 
 # Personal files (用户个人配置)

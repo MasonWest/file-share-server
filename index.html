@@ -28,11 +28,25 @@
             class="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none ring-0 placeholder:text-slate-500 focus:border-sky-400"
             @keyup.enter="login"
           />
+          <label class="flex cursor-pointer items-start gap-2.5 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2.5">
+            <input
+              v-model="rememberDevice"
+              type="checkbox"
+              class="mt-0.5 h-4 w-4 shrink-0 accent-sky-500"
+            />
+            <span class="text-sm text-slate-300">
+              在这台设备上记住我
+              <span class="mt-0.5 block text-xs leading-relaxed text-slate-500">
+                勾选后本设备一年内免输口令。设备丢了可以在「已登录设备」里单独撤销，不影响其他设备。
+              </span>
+            </span>
+          </label>
           <button
             @click="login"
-            class="w-full rounded-xl bg-sky-500 px-4 py-3 font-medium text-slate-950 hover:bg-sky-400"
+            :disabled="loggingIn"
+            class="w-full rounded-xl bg-sky-500 px-4 py-3 font-medium text-slate-950 hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            登录
+            {{ loggingIn ? '正在验证…' : '登录' }}
           </button>
           <p v-if="authMessage" class="text-sm text-rose-300 whitespace-pre-line">{{ authMessage }}</p>
         </div>
@@ -44,11 +58,19 @@
         <div>
           <div class="text-xs uppercase tracking-[0.3em] text-sky-300">File Share</div>
           <h1 class="mt-1 text-3xl font-semibold">私人文件管理面板</h1>
-          <p class="mt-2 text-sm text-slate-400">管理接口受 `X-Admin-Token` 保护，分享链接 `/s/{token}` 不走管理员校验。</p>
+          <p class="mt-2 text-sm text-slate-400">设备令牌鉴权，登录一次后免密；分享链接 <code class="text-slate-300">/s/{token}</code> 不走管理员校验。</p>
         </div>
-        <button @click="logout" class="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 hover:bg-slate-800">
-          退出登录
-        </button>
+        <div class="flex flex-wrap items-center gap-2">
+          <button @click="openSharesDialog" class="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 hover:bg-slate-800">
+            活跃分享
+          </button>
+          <button @click="openDevicesDialog" class="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 hover:bg-slate-800">
+            已登录设备
+          </button>
+          <button @click="logout" class="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 hover:bg-slate-800">
+            退出登录
+          </button>
+        </div>
       </div>
 
       <div class="mb-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl backdrop-blur">
@@ -118,7 +140,13 @@
             class="flex w-full items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-left hover:border-sky-500/60 hover:bg-slate-900"
           >
             <div>
-              <div class="font-medium" v-html="highlightMatch(folder.name, searchQuery)"></div>
+              <div class="font-medium">
+                <span
+                  v-for="(seg, i) in highlightSegments(folder.name, searchQuery)"
+                  :key="i"
+                  :class="seg.hit ? 'rounded bg-amber-300/80 px-0.5 text-slate-950' : ''"
+                >{{ seg.text }}</span>
+              </div>
               <div class="text-xs text-slate-500">修改时间: {{ new Date(folder.mtime * 1000).toLocaleString() }}</div>
             </div>
             <div class="text-sky-300">进入</div>
@@ -130,7 +158,7 @@
       <div class="mt-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl backdrop-blur">
         <div class="mb-4 flex items-center justify-between">
           <h2 class="text-lg font-semibold">文件</h2>
-          <div class="text-sm text-slate-400">共 {{ filteredFiles.length }} 个</div>
+          <div class="text-sm text-slate-400">已加载 {{ filteredFiles.length }} / 共 {{ totalFiles }} 个</div>
         </div>
         <div class="space-y-3">
           <div
@@ -139,7 +167,13 @@
             class="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 md:flex-row md:items-center md:justify-between"
           >
             <div>
-              <div class="font-medium" v-html="highlightMatch(file.name, searchQuery)"></div>
+              <div class="font-medium">
+                <span
+                  v-for="(seg, i) in highlightSegments(file.name, searchQuery)"
+                  :key="i"
+                  :class="seg.hit ? 'rounded bg-amber-300/80 px-0.5 text-slate-950' : ''"
+                >{{ seg.text }}</span>
+              </div>
               <div class="text-xs text-slate-500">
                 {{ (file.size / 1024).toFixed(1) }} KB | {{ new Date(file.mtime * 1000).toLocaleString() }}
               </div>
@@ -159,6 +193,15 @@
             </div>
           </div>
           <div v-if="filteredFiles.length === 0" class="py-6 text-center text-sm text-slate-500">没有匹配的文件</div>
+          <div v-if="hasMoreFiles" class="pt-1 text-center">
+            <button
+              @click="loadMoreFiles"
+              :disabled="loadingMore"
+              class="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-500"
+            >
+              {{ loadingMore ? '加载中…' : `加载更多（还有 ${Math.max(totalFiles - files.length, 0)} 个）` }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -214,6 +257,93 @@
         </div>
       </div>
     </div>
+    <div
+      v-if="devicesDialog.open"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 backdrop-blur-sm"
+      @click.self="closeDevicesDialog"
+    >
+      <div class="w-full max-w-xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h2 class="text-lg font-semibold">已登录设备</h2>
+            <p class="mt-1 text-sm text-slate-400">这些设备无需再输口令。设备丢失请立即撤销。</p>
+          </div>
+          <button @click="closeDevicesDialog" class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:border-slate-500 hover:bg-slate-800">
+            关闭
+          </button>
+        </div>
+
+        <div class="mt-4 space-y-2">
+          <div v-if="devicesDialog.loading" class="py-8 text-center text-sm text-slate-500">读取中…</div>
+          <div v-else-if="devicesDialog.list.length === 0" class="py-8 text-center text-sm text-slate-500">
+            还没有受信设备。下次登录时勾选「在这台设备上记住我」即可。
+          </div>
+          <div
+            v-for="device in devicesDialog.list"
+            :key="device.id"
+            class="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3"
+          >
+            <div class="min-w-0">
+              <div class="truncate font-medium">{{ device.name }}</div>
+              <div class="mt-0.5 text-xs text-slate-500">
+                {{ formatDateTime(device.created_at) }} 授权 · {{ device.expired ? '已过期' : '有效' }}
+              </div>
+            </div>
+            <button
+              @click="revokeDevice(device.id)"
+              class="shrink-0 rounded-lg border border-rose-500/40 px-3 py-1.5 text-sm text-rose-300 hover:bg-rose-500/10"
+            >
+              撤销
+            </button>
+          </div>
+        </div>
+
+        <p class="mt-4 text-xs text-slate-500">撤销后该设备下次访问需重新输入口令；撤销当前设备等同于退出登录。</p>
+      </div>
+    </div>
+
+    <div
+      v-if="sharesDialog.open"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 backdrop-blur-sm"
+      @click.self="closeSharesDialog"
+    >
+      <div class="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h2 class="text-lg font-semibold">活跃分享链接</h2>
+            <p class="mt-1 text-sm text-slate-400">链接现在会存盘，服务重启后依然有效。不用的请及时作废。</p>
+          </div>
+          <button @click="closeSharesDialog" class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:border-slate-500 hover:bg-slate-800">
+            关闭
+          </button>
+        </div>
+
+        <div class="mt-4 max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+          <div v-if="sharesDialog.loading" class="py-8 text-center text-sm text-slate-500">读取中…</div>
+          <div v-else-if="sharesDialog.list.length === 0" class="py-8 text-center text-sm text-slate-500">
+            当前没有生效中的分享链接。
+          </div>
+          <div
+            v-for="share in sharesDialog.list"
+            :key="share.token"
+            class="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3"
+          >
+            <div class="min-w-0">
+              <div class="truncate font-medium">{{ share.filepath }}</div>
+              <div class="mt-0.5 text-xs text-slate-500">
+                {{ share.download_count }} / {{ share.max_downloads }} 次 · 到期 {{ formatDateTime(share.expires_at) }}
+              </div>
+            </div>
+            <button
+              @click="revokeShare(share.token)"
+              class="shrink-0 rounded-lg border border-rose-500/40 px-3 py-1.5 text-sm text-rose-300 hover:bg-rose-500/10"
+            >
+              作废
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -238,18 +368,60 @@
           copied: false,
         })
         const shareUrlInput = ref(null)
+        const rememberDevice = ref(true)
+        const loggingIn = ref(false)
+        const devicesDialog = ref({ open: false, list: [], loading: false })
+        const sharesDialog = ref({ open: false, list: [], loading: false })
+        // 分页：一个目录几千个文件时，一次全量返回既慢又卡。
+        // 后端按页给，前端用「加载更多」累加。
+        const totalFiles = ref(0)
+        const hasMoreFiles = ref(false)
+        const loadingMore = ref(false)
+        // 上传上限由后端 /health 提供，前端只负责提前拦一下，避免白等大文件
+        const uploadLimitMb = ref(0)
         const apiBase = `${window.location.origin}/api`
+
+        // 设备令牌放 localStorage：登录一次，之后免密。
+        // 管理员口令不再落盘，只在登录请求里用一次。
+        function deviceToken() {
+          return localStorage.getItem("device_token") || ""
+        }
 
         function authHeaders(extra = {}) {
           const headers = { ...extra }
-          const token = sessionStorage.getItem("admin_token")
-          if (token) {
-            headers["X-Admin-Token"] = token
+          const dtoken = deviceToken()
+          if (dtoken) {
+            headers["X-Device-Token"] = dtoken
+            return headers
+          }
+          const atoken = sessionStorage.getItem("admin_token")
+          if (atoken) {
+            headers["X-Admin-Token"] = atoken
           }
           return headers
         }
 
+        // 浏览器原生下载带不了自定义请求头，只能把凭据放查询参数
+        function authQuery() {
+          const dtoken = deviceToken()
+          if (dtoken) {
+            return `dt=${encodeURIComponent(dtoken)}`
+          }
+          return `token=${encodeURIComponent(sessionStorage.getItem("admin_token") || "")}`
+        }
+
+        // 逐段编码：encodeURI 不会编码 # 和 ?，文件名里带上它们会让整条路径失效
+        function encodePath(path) {
+          return String(path || "")
+            .split("/")
+            .filter(Boolean)
+            .map(encodeURIComponent)
+            .join("/")
+        }
+
         function clearAuth() {
+          localStorage.removeItem("device_token")
+          localStorage.removeItem("device_id")
           sessionStorage.removeItem("admin_token")
           loginToken.value = ""
           authenticated.value = false
@@ -266,27 +438,173 @@
             return
           }
 
-          const response = await fetch(`${apiBase}/auth/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token })
-          })
+          loggingIn.value = true
+          try {
+            const response = await fetch(`${apiBase}/auth/login`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token, remember: rememberDevice.value })
+            })
 
-          if (!response.ok) {
             const data = await response.json().catch(() => ({}))
-            authMessage.value = data.detail || `登录失败 (${response.status})`
+
+            if (!response.ok) {
+              authMessage.value = data.detail || `登录失败 (${response.status})`
+              if (data.retry_after) {
+                authMessage.value += `\n剩余约 ${Math.max(1, Math.round(data.retry_after / 60))} 分钟，也可以从已登录的设备上解锁。`
+              }
+              return
+            }
+
+            if (data.device_token) {
+              localStorage.setItem("device_token", data.device_token)
+              localStorage.setItem("device_id", data.device_id || "")
+            } else {
+              // 没勾「记住我」：本次会话仍需凭口令操作，关掉页面即失效
+              sessionStorage.setItem("admin_token", token)
+            }
+
+            loginToken.value = ""
+            authenticated.value = true
+            authMessage.value = ""
+            await fetchFiles("")
+          } catch (error) {
+            authMessage.value = `连接服务失败：${error.message}`
+          } finally {
+            loggingIn.value = false
+          }
+        }
+
+        async function logout() {
+          const currentId = localStorage.getItem("device_id")
+          if (currentId) {
+            // 退出即撤销当前设备令牌，避免「退出登录」只是本地装样子
+            try {
+              await fetch(`${apiBase}/devices/${encodeURIComponent(currentId)}`, {
+                method: "DELETE",
+                headers: authHeaders()
+              })
+            } catch (error) {
+              // 撤销失败不阻塞本地退出：本机凭据已经清掉了
+            }
+          }
+          clearAuth()
+        }
+
+        async function openDevicesDialog() {
+          devicesDialog.value.open = true
+          devicesDialog.value.loading = true
+          try {
+            const response = await fetch(`${apiBase}/devices`, { headers: authHeaders() })
+            if (response.status === 401 || response.status === 423) {
+              clearAuth()
+              devicesDialog.value.open = false
+              authMessage.value = "登录状态已失效，请重新输入口令。"
+              return
+            }
+            const data = await response.json()
+            devicesDialog.value.list = data.devices || []
+          } catch (error) {
+            devicesDialog.value.list = []
+          } finally {
+            devicesDialog.value.loading = false
+          }
+        }
+
+        function closeDevicesDialog() {
+          devicesDialog.value.open = false
+        }
+
+        async function openSharesDialog() {
+          sharesDialog.value.open = true
+          sharesDialog.value.loading = true
+          try {
+            const response = await fetch(`${apiBase}/shares`, { headers: authHeaders() })
+            if (response.status === 401 || response.status === 423) {
+              clearAuth()
+              sharesDialog.value.open = false
+              authMessage.value = "登录状态已失效，请重新输入口令。"
+              return
+            }
+            const data = await response.json()
+            sharesDialog.value.list = Array.isArray(data) ? data : []
+          } catch (error) {
+            sharesDialog.value.list = []
+          } finally {
+            sharesDialog.value.loading = false
+          }
+        }
+
+        function closeSharesDialog() {
+          sharesDialog.value.open = false
+        }
+
+        async function revokeShare(token) {
+          if (!confirm("作废后这条链接立即失效，确定吗？")) {
+            return
+          }
+          try {
+            const response = await fetch(`${apiBase}/shares/${encodeURIComponent(token)}`, {
+              method: "DELETE",
+              headers: authHeaders(),
+            })
+            if (!response.ok) {
+              const data = await response.json().catch(() => ({}))
+              alert(data.detail || `作废失败 (${response.status})`)
+              return
+            }
+            sharesDialog.value.list = sharesDialog.value.list.filter((item) => item.token !== token)
+          } catch (error) {
+            alert(`作废失败：${error.message}`)
+          }
+        }
+
+        // 上传上限从后端拿，避免前后端各写一个数字最后不一致
+        async function loadServerInfo() {
+          try {
+            const response = await fetch(`${window.location.origin}/health`)
+            if (!response.ok) {
+              return
+            }
+            const data = await response.json()
+            if (typeof data.upload_limit_mb === "number") {
+              uploadLimitMb.value = data.upload_limit_mb
+            }
+          } catch (error) {
+            // 拿不到就不做前端预检，后端仍然是权威
+          }
+        }
+
+        async function revokeDevice(deviceId) {
+          const isCurrent = deviceId === localStorage.getItem("device_id")
+          try {
+            const response = await fetch(`${apiBase}/devices/${encodeURIComponent(deviceId)}`, {
+              method: "DELETE",
+              headers: authHeaders()
+            })
+            if (!response.ok) {
+              alert("撤销失败，请重试。")
+              return
+            }
+          } catch (error) {
+            alert(`撤销失败：${error.message}`)
             return
           }
 
-          sessionStorage.setItem("admin_token", token)
-          loginToken.value = ""
-          authenticated.value = true
-          authMessage.value = ""
-          await fetchFiles("")
+          if (isCurrent) {
+            clearAuth()
+            devicesDialog.value.open = false
+            authMessage.value = "当前设备已撤销，请重新登录。"
+            return
+          }
+          devicesDialog.value.list = devicesDialog.value.list.filter((item) => item.id !== deviceId)
         }
 
-        function logout() {
-          clearAuth()
+        function formatDateTime(value) {
+          if (!value) return "未知时间"
+          const date = new Date(value)
+          if (Number.isNaN(date.getTime())) return "未知时间"
+          return date.toLocaleString()
         }
 
         const pathParts = computed(() => {
@@ -328,15 +646,41 @@
           fileSortOrder.value = "asc"
         }
 
-        function highlightMatch(text, query) {
-          if (!query) return text
-          const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-          return text.replace(new RegExp(`(${escapedQuery})`, "gi"), '<span class="rounded bg-amber-300/80 px-0.5 text-slate-950">$1</span>')
+        // 返回文本片段而不是拼 HTML 字符串：文件名来自文件系统（可能是 SMB
+        // 上由 Linux/NAS 写入的名字），拼 HTML 再交给 v-html 就是存储型 XSS。
+        function highlightSegments(text, query) {
+          const source = String(text == null ? "" : text)
+          const needle = String(query == null ? "" : query)
+          if (!needle || !source) {
+            return [{ text: source, hit: false }]
+          }
+
+          const lowerSource = source.toLowerCase()
+          const lowerNeedle = needle.toLowerCase()
+          const segments = []
+          let cursor = 0
+
+          while (cursor < source.length) {
+            const found = lowerSource.indexOf(lowerNeedle, cursor)
+            if (found === -1) {
+              segments.push({ text: source.slice(cursor), hit: false })
+              break
+            }
+            if (found > cursor) {
+              segments.push({ text: source.slice(cursor, found), hit: false })
+            }
+            segments.push({ text: source.slice(found, found + needle.length), hit: true })
+            cursor = found + needle.length
+          }
+
+          return segments.length ? segments : [{ text: source, hit: false }]
         }
 
-        async function fetchFiles(path = "") {
-          const url = path ? `${apiBase}/list/${encodeURI(path)}` : `${apiBase}/list`
-          const response = await fetch(url, { headers: authHeaders() })
+        async function fetchFiles(path = "", options = {}) {
+          const append = options.append === true
+          const offset = append ? files.value.length : 0
+          const baseUrl = path ? `${apiBase}/list/${encodePath(path)}` : `${apiBase}/list`
+          const response = await fetch(`${baseUrl}?offset=${offset}`, { headers: authHeaders() })
 
           if (response.status === 401 || response.status === 423) {
             clearAuth()
@@ -353,10 +697,31 @@
 
           const data = await response.json()
           currentPath.value = data.path || ""
-          folders.value = data.folders || []
-          files.value = data.files || []
+          if (append) {
+            // 分页期间目录可能被增删，offset 会错位 → 按 path 去重，
+            // 宁可少一条重复也不要让列表里出现两个同名条目
+            const known = new Set(files.value.map((item) => item.path))
+            files.value = files.value.concat((data.files || []).filter((item) => !known.has(item.path)))
+          } else {
+            folders.value = data.folders || []
+            files.value = data.files || []
+          }
+          totalFiles.value = typeof data.total_files === "number" ? data.total_files : files.value.length
+          hasMoreFiles.value = Boolean(data.has_more)
           authenticated.value = true
           return true
+        }
+
+        async function loadMoreFiles() {
+          if (loadingMore.value || !hasMoreFiles.value) {
+            return
+          }
+          loadingMore.value = true
+          try {
+            await fetchFiles(currentPath.value, { append: true })
+          } finally {
+            loadingMore.value = false
+          }
         }
 
         function selectFile(event) {
@@ -419,9 +784,8 @@
             // 关键：让浏览器原生发起下载（直接导航），由浏览器下载管理器
             // 实时显示进度条。不能再走 fetch().blob()——那会把整文件先缓冲进
             // 内存，导致“等十几秒才弹进度、然后秒好”。
-            // 鉴权 token 通过 ?token= 传入（浏览器原生下载无法带自定义请求头）。
-            const token = sessionStorage.getItem("admin_token") || ""
-            const url = `${apiBase}/download/${encodeURI(filepath)}?token=${encodeURIComponent(token)}`
+            // 鉴权凭据通过查询参数传入（浏览器原生下载无法带自定义请求头）。
+            const url = `${apiBase}/download/${encodePath(filepath)}?${authQuery()}`
             const filename = filepath.split("/").pop() || "download"
             const link = document.createElement("a")
             link.href = url
@@ -443,6 +807,15 @@
             return
           }
 
+          // 后端有权威上限，这里提前拦一下：让用户在传之前就知道不行，
+          // 而不是等传到 90% 才看到 413
+          const limitMb = uploadLimitMb.value
+          if (limitMb > 0 && selectedFile.value.size > limitMb * 1024 * 1024) {
+            const sizeGb = (selectedFile.value.size / 1024 / 1024 / 1024).toFixed(2)
+            alert(`文件 ${sizeGb} GB，超过 ${limitMb} MB 上传上限。`)
+            return
+          }
+
           const formData = new FormData()
           formData.append("file", selectedFile.value)
 
@@ -452,7 +825,9 @@
             : `${apiBase}/upload`
 
           xhr.open("POST", uploadUrl)
-          xhr.setRequestHeader("X-Admin-Token", sessionStorage.getItem("admin_token") || "")
+          Object.entries(authHeaders()).forEach(([key, value]) => {
+            xhr.setRequestHeader(key, value)
+          })
 
           xhr.upload.onprogress = (event) => {
             if (event.lengthComputable) {
@@ -467,7 +842,13 @@
               alert("上传成功")
               return
             }
-            alert(`上传失败: ${xhr.responseText}`)
+            let detail = xhr.responseText
+            try {
+              detail = JSON.parse(xhr.responseText).detail || detail
+            } catch (error) {
+              // 非 JSON 响应（代理错误页等）就原样显示
+            }
+            alert(xhr.status === 413 ? `上传被拒绝：${detail}` : `上传失败：${detail}`)
           }
 
           xhr.send(formData)
@@ -494,7 +875,9 @@
           fetchFiles(path)
         }
 
-        const storedToken = sessionStorage.getItem("admin_token")
+        loadServerInfo()
+
+        const storedToken = deviceToken() || sessionStorage.getItem("admin_token")
         if (storedToken) {
           fetchFiles().then((ok) => {
             if (!ok) {
@@ -530,7 +913,23 @@
           createShareLink,
           goToPath,
           setFileSort,
-          highlightMatch,
+          highlightSegments,
+          rememberDevice,
+          loggingIn,
+          devicesDialog,
+          openDevicesDialog,
+          closeDevicesDialog,
+          revokeDevice,
+          sharesDialog,
+          openSharesDialog,
+          closeSharesDialog,
+          revokeShare,
+          totalFiles,
+          hasMoreFiles,
+          loadingMore,
+          loadMoreFiles,
+          uploadLimitMb,
+          formatDateTime,
           login,
           logout,
           isDownloading

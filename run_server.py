@@ -37,6 +37,35 @@ def is_port_available(host: str, port: int) -> bool:
     return True
 
 
+def local_addresses() -> list[str]:
+    """列出本机能被内网其他设备访问到的 IPv4 地址。
+
+    管理端绑 0.0.0.0 时，用户需要知道手机该输哪个 IP——让他去 ipconfig 里
+    找一堆虚拟网卡地址是没必要的折磨。
+    """
+    addresses: list[str] = []
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            addr = info[4][0]
+            if addr not in addresses and not addr.startswith("127."):
+                addresses.append(addr)
+    except OSError:
+        pass
+
+    # 兜底：用一个不会真正发包的 UDP connect 拿到默认出口网卡地址
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            primary = sock.getsockname()[0]
+            if primary not in addresses and not primary.startswith("127."):
+                addresses.insert(0, primary)
+    except OSError:
+        pass
+
+    return addresses
+
+
 async def run_servers():
     admin_server = build_server("filesvc_api:app_internal", ADMIN_HOST, ADMIN_PORT)
     public_server = build_server("filesvc_api:app_public", PUBLIC_HOST, PUBLIC_PORT)
@@ -54,6 +83,21 @@ async def run_servers():
     print("Ports:")
     print(f"[{ADMIN_PORT}] admin interface with token auth")
     print(f"[{PUBLIC_PORT}] public download only")
+    print("-" * 50)
+
+    lan = local_addresses()
+    if lan:
+        print("内网可用地址（手机 / 平板 / VR 用这些）:")
+        for addr in lan:
+            print(f"  http://{addr}:{ADMIN_PORT}")
+    else:
+        print(f"未探测到内网地址，请手动访问 http://<本机内网IP>:{ADMIN_PORT}")
+
+    print("-" * 50)
+    print("安全提醒:")
+    print(f"  路由器只映射 {PUBLIC_PORT}/公网映射端口，不要映射 {ADMIN_PORT}")
+    print("  管理端首次登录后会自动记住该设备，之后无需再输口令")
+    print("  关闭服务：双击 stop_server.bat（或 Ctrl+C）")
     print("=" * 50)
 
     await asyncio.gather(

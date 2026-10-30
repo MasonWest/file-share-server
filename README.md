@@ -22,12 +22,13 @@
 - **实时日志**：控制台打印每次下载的 IP、Token、文件名
 - **Vclip 联动**：分享链接生成后自动写入剪贴板（见下文）
 - **路径安全**：绝对路径和 `..` 穿越一律拒绝，所有操作限制在 `SHARE_DIR` 内
-- **防爆破**：管理 Token 连续错误 3 次，该 IP 锁定 24 小时
+- **设备免密登录**：首次输一次口令，之后本设备凭设备令牌直接进入；设备丢失可单独撤销，不影响其他设备
+- **渐进式防爆破**：连续错 5 次锁定 5 分钟，再犯翻倍（上限 1 小时），可从已登录设备解锁
 
 ## 环境要求
 
 - **Python 3.10 或以上**。代码用到了 `int | None` 联合类型语法，3.9 及以下会直接语法报错。
-- 无需数据库。分享 Token 和登录状态都存在内存里。
+- 无需数据库。设备令牌和分享链接各存一个 JSON 文件（`devices.json` / `shares.json`），写入走「临时文件 + 原子替换」，崩溃不会读到半截内容。
 
 ## 快速开始
 
@@ -47,6 +48,14 @@ Windows 也可以直接双击 `start_server.bat`（会先检查 `python` 是否�
 
 启动后会打印两个端口的访问地址。管理端首次访问需要输入 `.env` 里的 `ADMIN_TOKEN`。
 
+关掉服务：双击 `stop_server.bat`。它会按端口找到监听进程，确认是 python 之后结束；如果端口被别的程序占着，它不会动手，只提示你加 `/force`。
+
+```bat
+stop_server.bat            :: 关闭 8800/9900（端口从 .env 读）
+stop_server.bat 8801       :: 关闭指定管理端口
+stop_server.bat /force     :: 端口被非 python 进程占用时强制结束
+```
+
 ## 环境变量
 
 | 变量 | 必填 | 默认值 | 说明 |
@@ -59,6 +68,15 @@ Windows 也可以直接双击 `start_server.bat`（会先检查 `python` 是否�
 | `TOKEN_EXPIRE_HOURS` | 否 | `24` | 分享链接默认有效期（小时） |
 | `MAX_DOWNLOADS` | 否 | `100` | 单个链接的默认最大下载次数 |
 | `ALLOW_OVERWRITE` | 否 | `false` | 上传时是否允许覆盖同名文件 |
+| `MAX_UPLOAD_MB` | 否 | `4096` | 单文件上传上限（MB），`0` 表示不限制。超限返回 413，不落盘 |
+| `LIST_PAGE_SIZE` | 否 | `200` | 目录列表每页文件数。目录数量本身不分页，始终全量返回 |
+| `DEVICE_TOKEN_TTL_DAYS` | 否 | `365` | 设备令牌有效期（天），到期需重新输口令 |
+| `DEVICES_FILE` | 否 | `devices.json` | 受信设备记录文件，只存令牌的 sha256 哈希 |
+| `SHARES_FILE` | 否 | `shares.json` | 分享链接记录文件，存相对 `SHARE_DIR` 的路径 |
+| `LOGIN_MAX_ATTEMPTS` | 否 | `5` | 连续失败多少次触发锁定 |
+| `LOGIN_LOCKOUT_SECONDS` | 否 | `300` | 首次锁定时长（秒），再犯翻倍 |
+| `LOGIN_LOCKOUT_MAX_SECONDS` | 否 | `3600` | 锁定时间上限（秒） |
+| `TRUST_PROXY` | 否 | `false` | 仅在反向代理后开启，否则 `X-Forwarded-For` 可被伪造 |
 | `VCLIP_API_URL` | 否 | `http://127.0.0.1:4173/api/clips` | Vclip 的写入接口 |
 | `VCLIP_ACCESS_PASSWORD` | 否 | 空 | Vclip 的 `ACCESS_PASSWORD`，不一致会被 401 拒绝 |
 | `VCLIP_TIMEOUT_SECONDS` | 否 | `5` | 推送 Vclip 的超时时间 |
@@ -69,17 +87,29 @@ Windows 也可以直接双击 `start_server.bat`（会先检查 `python` 是否�
 
 ### 管理端（8800）
 
-除 `/` 和 `/api/auth/login` 外，所有 `/api/*` 都需要携带 Token：请求头 `X-Admin-Token: <token>`，或查询参数 `?token=<token>`（浏览器原生下载无法带自定义请求头，故支持后者）。
+鉴权有两条路，任一条有效即可：
+
+1. **设备令牌（推荐）**：首次用口令登录时勾选「在这台设备上记住我」，服务端签发一个长期令牌，前端存 `localStorage`，之后自动携带 `X-Device-Token: <device_token>`。管理员口令不再留在浏览器里。
+2. **管理员口令**：请求头 `X-Admin-Token: <token>`，或查询参数 `?token=<token>`。仅用于登录和临时调试。
+
+浏览器原生下载无法带自定义请求头，因此下载接口额外支持设备令牌查询参数 `?dt=<device_token>`。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/api/auth/login` | 校验 Token，成功返回 `{"ok": true}` |
-| `GET` | `/api/list` | 列出根目录 |
-| `GET` | `/api/list/{path}` | 列出子目录 |
-| `POST` | `/api/upload?path=` | 上传文件（multipart） |
+| `POST` | `/api/auth/login` | 校验口令；`remember=true` 时额外返回 `device_token` |
+| `POST` | `/api/auth/unlock` | 解除某个 IP 的登录锁定（需已通过鉴权） |
+| `GET` | `/api/devices` | 列出所有受信设备 |
+| `DELETE` | `/api/devices/{id}` | 撤销某台设备 |
+| `GET` | `/api/list?offset=0&limit=200` | 列出根目录（`limit=0` 返回全量，默认取 `LIST_PAGE_SIZE`） |
+| `GET` | `/api/list/{path}` | 列出子目录，支持同样的分页参数 |
+| `POST` | `/api/upload?path=` | 上传文件（multipart），超过 `MAX_UPLOAD_MB` 返回 413 |
 | `GET` | `/api/download/{filepath}` | 下载文件（需鉴权） |
 | `POST` | `/api/share-link` | 生成分享链接 |
 | `GET` | `/api/shares` | 查看所有活跃链接及下载统计 |
+| `DELETE` | `/api/shares/{token}` | 手动作废一条链接 |
+| `GET` | `/health` | 健康检查（无需鉴权，不含敏感信息） |
+
+列表响应里 `folders` 始终是完整列表，`files` 按页返回；`total_files` / `has_more` / `next_offset` 用于「加载更多」。
 
 生成分享链接：
 
@@ -157,39 +187,58 @@ HTTP 接口才是稳定契约：Vclip 内部怎么存，这里不需要知道，
 
 | 层面 | 措施 |
 |---|---|
-| 管理端认证 | Token 校验用 `hmac.compare_digest` 做常量时间比较，避免时序侧信道 |
-| 防爆破 | 连续 3 次错误锁定该 IP 24 小时，成功登录后清零 |
-| 公网暴露面 | 9900 端口只认 `/s/{token}`，无文件列表、无上传、无管理接口 |
+| 管理端认证 | 设备令牌（存 sha256 哈希）优先，管理员口令兜底；口令比较用 `hmac.compare_digest` 做常量时间比较 |
+| 凭据留存 | 口令只在登录请求中出现一次，浏览器只保存设备令牌，不保存口令 |
+| 设备撤销 | 每台设备独立令牌，丢失可单独撤销，不影响其他设备 |
+| 防爆破 | 连续 5 次错误锁定 5 分钟，再犯翻倍（上限 1 小时）；可从已登录设备调用 `/api/auth/unlock` 解除 |
+| 公网暴露面 | 9900 端口只认 `/s/{token}` 与 `/health`，无文件列表、无上传、无管理接口 |
+| 接口清单 | 管理端的 `/docs`、`/openapi.json`、`/redoc` 全部关闭 |
 | 路径穿越 | `resolve()` 后再校验是否仍在 `BASE_DIR` 内，绝对路径直接拒绝 |
-| 下载限制 | Token 可设有效期与最大下载次数，超限即销毁 |
+| 下载限制 | Token 可设有效期与最大下载次数，超限即销毁；文件已删除时不消耗额度 |
 
 需要注意：
 
-- **分享 Token 存在内存里，服务重启后全部失效**，这是设计取舍而非缺陷——换来的是零持久化依赖。如果重启后需要链接继续可用，得改造为写文件或数据库。
-- **对外暴露 9900 请套 HTTPS**。Token 在 URL 路径里，明文 HTTP 会进各种中间日志。
-- 管理端 `8800` 建议只绑内网，或至少不要直接映射到公网。
+- **路由器只需映射公网端端口**（默认 9900 或你的外网映射端口）。管理端 8800 监听所有网卡是为了让手机 / 平板 / VR 从内网登录，**不要把它映射到公网**。
+- **分享链接会持久化到 `shares.json`**（默认项目根目录，已 gitignore），服务重启后已发出去的链接继续有效。存的是相对 `SHARE_DIR` 的路径，换盘或换机器也能指向对的文件。
+- **受信设备记录会持久化**到 `devices.json`（默认在项目根目录，已 gitignore），服务重启不影响设备免密登录。
+- **对外暴露公网端口请套 HTTPS**。Token 在 URL 路径里，明文 HTTP 会进各种中间日志。
+- 管理口令建议用「好记但够长」的短语（如 `mason-travel-2026`），不必背随机串——强度由设备令牌、限流和端口隔离共同承担。
 
 ## 项目结构
 
 ```
 file-share-server/
-├── filesvc_api.py       # 核心逻辑：两个 FastAPI 应用、鉴权、分享、Vclip 推送
+├── filesvc_api.py       # 两个 FastAPI 应用、鉴权、分享、Vclip 推送
+├── device_store.py      # 设备令牌签发 / 校验 / 撤销（只存哈希）
+├── share_store.py       # 分享链接持久化（只存相对路径）
 ├── index.html           # 单页管理端 UI
 ├── run_server.py        # 双端口启动入口（asyncio.gather 同时跑两个 uvicorn）
+├── test_filesvc.py      # 回归测试（python test_filesvc.py，无需 pytest）
 ├── start_server.bat     # Windows 快捷启动
+├── stop_server.bat      # Windows 一键关闭（按端口找进程，不误杀别的程序）
 ├── requirements.txt
 ├── MIGRATION_SUMMARY.md # Vclip 联动方式变更记录
 └── .env                 # 本地配置，已 gitignore
 ```
 
-`run_server.py` 启动前会检查两个端口是否被占用，冲突时直接退出并提示。
+`run_server.py` 启动前会检查两个端口是否被占用，冲突时直接退出并提示；启动后会打印本机的内网地址，手机 / 平板直接照着输即可。
 
 ## 已知限制
 
-- 分享 Token、下载统计、登录锁定状态全部在内存中，**多进程部署不共享**（`workers=1`，不要改）。
-- 上传大小没设硬上限，超大文件会长时间占用连接；需要限制请在反向代理层做。
-- 服务端没有删除路由，管理端 UI 也没有删除入口。清理文件请直接操作 `SHARE_DIR` 目录。
+- 分享链接、设备令牌已持久化；**登录锁定状态仍在内存中**，进程重启后自动解锁（这对单人服务反而是好事）。多进程部署仍不共享状态，`workers=1` 不要改。
+- 上传上限默认 4096 MB，可在 .env 用 `MAX_UPLOAD_MB` 调整；超限在上传过程中即中止并删除半截文件，不会写满磁盘。
+- 目录列表按文件分页（默认每页 200 条），子目录始终全量返回。
+- 服务端没有删除文件的接口，管理端 UI 也没有删除入口。清理文件请直接操作 `SHARE_DIR` 目录；分享链接可以在「活跃分享」里作废。
 - 下载响应统一为 `application/octet-stream`，浏览器一律走下载而非内联预览。
+- 登录锁定按来源 IP 计。多台设备共用一个 NAT 出口时会一起被锁，用 `/api/auth/unlock` 或等 5 分钟即可。
+
+## 测试
+
+```bash
+python test_filesvc.py
+```
+
+全程使用临时目录，不会碰真实 `SHARE_DIR`。覆盖：鉴权与设备令牌、设备撤销、路径穿越、上传异常、分享生命周期、下载计数、渐进式锁定与解锁。
 
 ## 许可证
 
