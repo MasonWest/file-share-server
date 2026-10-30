@@ -13,7 +13,7 @@ echo.
 where python >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python was not found in PATH.
-    echo Install Python 3.7+ and try again.
+    echo Install Python 3.10+ and try again.
     pause
     exit /b 1
 )
