@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 SHARE_TMP = tempfile.mkdtemp(prefix="fs_share_")
@@ -215,6 +216,18 @@ def main() -> int:
     token = share_resp.json().get("token")
     check("生成分享链接返回 token", bool(token))
 
+    # 前端抽屉里的有效期/次数选择器是照这两个参数发请求的，
+    # 传了不生效的话，界面上选「5 分钟」实际却是 24 小时
+    try:
+        expires_at = datetime.fromisoformat(share_resp.json()["expires_at"])
+        delta = (expires_at - datetime.now(timezone.utc)).total_seconds()
+        check("expire_seconds 参数生效（约 600 秒）", 570 <= delta <= 610, f"实际 {delta:.0f}s")
+    except Exception as exc:  # noqa: BLE001
+        check("expire_seconds 参数生效（约 600 秒）", False, f"解析失败 {exc}")
+
+    listed = next((item for item in c.get("/api/shares", headers=ADMIN).json() if item["token"] == token), None)
+    check("max_downloads 参数生效", bool(listed) and listed["max_downloads"] == 5, str(listed and listed["max_downloads"]))
+
     # 模拟重启：新开一个 store 从同一个文件读，等价于进程重启后再加载
     from share_store import ShareStore as _ShareStore
 
@@ -242,6 +255,46 @@ def main() -> int:
     svc.MAX_UPLOAD_BYTES = original_limit
     ok_upload = c.post("/api/upload", headers=ADMIN, files={"file": ("small.txt", b"ok")})
     check("上限恢复后小文件可上传", ok_upload.status_code == 200, str(ok_upload.status_code))
+
+    print("\n[服务信息]")
+    info = c.get("/api/server-info", headers=ADMIN)
+    check("server-info 可访问", info.status_code == 200, str(info.status_code))
+    body = info.json() if info.status_code == 200 else {}
+    check(
+        "返回共享目录真实路径",
+        bool(body.get("share_dir")) and Path(body["share_dir"]).resolve() == share.resolve(),
+        str(body.get("share_dir")),
+    )
+    for field in (
+        "admin_port",
+        "public_port",
+        "default_expire_hours",
+        "max_expire_hours",
+        "default_max_downloads",
+        "upload_limit_mb",
+        "list_page_size",
+        "device_token_ttl_days",
+        "version",
+    ):
+        check(f"含真实字段 {field}", field in body and body[field] not in (None, ""), str(body.get(field)))
+    check("分页大小与内部变量一致", body.get("list_page_size") == svc.DEFAULT_PAGE_SIZE, str(body.get("list_page_size")))
+    check("上传上限与内部变量一致", body.get("upload_limit_mb") == svc.MAX_UPLOAD_MB, str(body.get("upload_limit_mb")))
+    check("未鉴权读不到配置", c.get("/api/server-info").status_code == 401)
+
+    print("\n[二维码]")
+    qr = c.get("/api/qr", params={"data": "http://127.0.0.1:9900/s/abc"}, headers=ADMIN)
+    check("qr 返回 200", qr.status_code == 200, str(qr.status_code))
+    check("qr 是 SVG", "image/svg+xml" in qr.headers.get("content-type", ""), qr.headers.get("content-type", ""))
+    check("qr 带 viewBox", "viewBox" in qr.text)
+    check("qr 尺寸撑满容器", 'width="100%"' in qr.text and 'height="100%"' in qr.text)
+    check("qr 不缓存", qr.headers.get("cache-control") == "no-store")
+    check("空内容返回 400", c.get("/api/qr", params={"data": ""}, headers=ADMIN).status_code == 400)
+    check("超长内容返回 400", c.get("/api/qr", params={"data": "x" * 2049}, headers=ADMIN).status_code == 400)
+    check("未鉴权不能用二维码", c.get("/api/qr", params={"data": "x"}).status_code == 401)
+    # 内容长度不同 → 二维码版本不同 → 毫米尺寸也不同，替换逻辑必须都成立
+    long_qr = c.get("/api/qr", params={"data": "http://127.0.0.1:9900/s/" + "a" * 120}, headers=ADMIN)
+    head_tag = long_qr.text.split("<svg", 1)[1].split(">", 1)[0]
+    check("长内容二维码也撑满容器", 'width="100%"' in head_tag and "mm" not in head_tag, head_tag[:100])
 
     print("\n[目录分页]")
     page_dir = share / "many"

@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import base64
 import hmac
+import io
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from secrets import token_hex
@@ -32,13 +34,22 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from device_store import DeviceStore
 from share_store import ShareStore
+
+# 二维码是可选能力：没装 qrcode 时只有「创建分享」抽屉里的扫码区降级成链接框，
+# 其余功能一概不受影响。做成可选是为了不让 pip 少装一个包就把整个服务拖挂。
+try:
+    import qrcode
+    import qrcode.image.svg as qr_svg
+except ImportError:  # pragma: no cover - 取决于部署环境
+    qrcode = None
+    qr_svg = None
 
 load_dotenv()
 
@@ -475,6 +486,65 @@ def create_internal_app() -> FastAPI:
             "uptime_seconds": uptime,
             "version": APP_VERSION,
         }
+
+    @app.get("/api/server-info")
+    async def server_info():
+        """设置页要展示的服务配置。
+
+        这里全部读真实生效的运行时变量，不做任何推测。前端「设置」视图宁可
+        少显示几项，也不拿假数字凑版面——那种仪表盘只会让人误判。
+        """
+        return {
+            "share_dir": str(BASE_DIR),
+            "share_dir_ok": os.access(BASE_DIR, os.W_OK),
+            "admin_host": ADMIN_HOST,
+            "admin_port": ADMIN_PORT,
+            "public_host": PUBLIC_HOST,
+            "public_port": PUBLIC_PORT,
+            "public_base_url": PUBLIC_BASE_URL,
+            "default_expire_hours": DEFAULT_TOKEN_EXPIRE_HOURS,
+            "max_expire_hours": MAX_SHARE_EXPIRE_SECONDS // 3600,
+            "default_max_downloads": MAX_DOWNLOADS,
+            "upload_limit_mb": MAX_UPLOAD_MB,
+            "list_page_size": DEFAULT_PAGE_SIZE,
+            "device_token_ttl_days": DEVICE_TOKEN_TTL_DAYS,
+            "vclip_enabled": bool(VCLIP_API_URL),
+            "qrcode_available": qrcode is not None,
+            "version": APP_VERSION,
+        }
+
+    @app.get("/api/qr")
+    async def qr_code(data: str):
+        """把任意文本编码成 SVG 二维码。
+
+        前端不画二维码，原因很简单：二维码编码（Reed-Solomon 纠错、掩码选择）
+        自己实现容易生成「看起来像二维码但扫不出来」的图案，而这种失败只有拿
+        手机真扫才发现。交给成熟库，前端只负责显示。
+
+        用 SVG 而不是 PNG：矢量，任意尺寸都清晰，且不受设备像素比影响。
+        """
+        if not data:
+            raise HTTPException(400, "二维码内容不能为空。")
+        if len(data) > 2048:
+            raise HTTPException(400, "二维码内容过长。")
+        if qrcode is None:
+            raise HTTPException(503, "服务端未安装 qrcode，无法生成二维码。")
+
+        image = qrcode.make(data, image_factory=qr_svg.SvgPathImage, box_size=10, border=2)
+        buffer = io.BytesIO()
+        image.save(buffer)
+        svg = buffer.getvalue().decode("utf-8")
+
+        # 库输出的是物理毫米尺寸（随二维码版本变化，不一定是 33mm）；改成撑满
+        # 容器，由 CSS 决定显示多大。用正则而不是写死字符串，否则内容一变长度
+        # 尺寸就对不上，只剩一半图案。
+        # 二维码必须保持深色模块 + 浅色底，不能跟随主题反色，否则扫码率会掉。
+        svg = re.sub(r'(width|height)="\d+(?:\.\d+)?mm"', r'\1="100%"', svg)
+        return Response(
+            content=svg,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post("/api/auth/login")
     async def admin_login(payload: AdminLoginRequest, request: Request):

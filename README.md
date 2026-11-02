@@ -11,7 +11,9 @@
 
 公网只会看到一个「给链接就能下载，不给链接什么都不知道」的端口。文件列表、上传能力全部留在内网端口。
 
-前端是单文件 `index.html`，用 Vue 3 的全局构建，无打包步骤。Vue 与 Tailwind 的运行时放在 `vendor/` 由本服务自己提供，**不依赖任何公网 CDN**——私人服务不该因为断网就白屏。
+前端是单文件 `index.html`，用 Vue 3 的全局构建，无打包步骤。样式是自己的 CSS 变量设计系统（不是 Tailwind），唯一的运行时依赖是 Vue，放在 `vendor/` 由本服务自己提供，**不依赖任何公网 CDN**——私人服务不该因为断网就白屏。
+
+界面分三个视图：**文件浏览 / 分享链接 / 设置**，侧边栏切换，深浅主题可切换（记忆在 localStorage）。
 
 ## 功能
 
@@ -107,6 +109,8 @@ stop_server.bat /force     :: 端口被非 python 进程占用时强制结束
 | `POST` | `/api/share-link` | 生成分享链接 |
 | `GET` | `/api/shares` | 查看所有活跃链接及下载统计 |
 | `DELETE` | `/api/shares/{token}` | 手动作废一条链接 |
+| `GET` | `/api/server-info` | 运行时配置（目录、端口、默认有效期/次数、上限、版本），供设置页展示 |
+| `GET` | `/api/qr?data=` | 把文本编码成 SVG 二维码（分享抽屉里的扫码用） |
 | `GET` | `/health` | 健康检查（无需鉴权，不含敏感信息） |
 
 列表响应里 `folders` 始终是完整列表，`files` 按页返回；`total_files` / `has_more` / `next_offset` 用于「加载更多」。
@@ -213,8 +217,8 @@ file-share-server/
 ├── filesvc_api.py       # 两个 FastAPI 应用、鉴权、分享、Vclip 推送
 ├── device_store.py      # 设备令牌签发 / 校验 / 撤销（只存哈希）
 ├── share_store.py       # 分享链接持久化（只存相对路径）
-├── index.html           # 单页管理端 UI
-├── vendor/              # 前端依赖本地化（Vue / Tailwind），断网可用
+├── index.html           # 单页管理端 UI（三视图 + 自带设计系统）
+├── vendor/              # 前端依赖本地化（只有 Vue），断网可用
 ├── run_server.py        # 双端口启动入口（asyncio.gather 同时跑两个 uvicorn）
 ├── test_filesvc.py      # 回归测试（python test_filesvc.py，无需 pytest）
 ├── start_server.bat     # Windows 快捷启动
@@ -231,9 +235,10 @@ file-share-server/
 - 分享链接、设备令牌已持久化；**登录锁定状态仍在内存中**，进程重启后自动解锁（这对单人服务反而是好事）。多进程部署仍不共享状态，`workers=1` 不要改。
 - 上传上限默认 4096 MB，可在 .env 用 `MAX_UPLOAD_MB` 调整；超限在上传过程中即中止并删除半截文件，不会写满磁盘。
 - 目录列表按文件分页（默认每页 200 条），子目录始终全量返回。
-- 服务端没有删除文件的接口，管理端 UI 也没有删除入口。清理文件请直接操作 `SHARE_DIR` 目录；分享链接可以在「活跃分享」里作废。
+- 服务端没有删除文件的接口，管理端 UI 也没有删除入口。清理文件请直接操作 `SHARE_DIR` 目录；分享链接可以在侧边栏的「分享链接」里作废。
 - 下载响应统一为 `application/octet-stream`，浏览器一律走下载而非内联预览。
 - 登录锁定按来源 IP 计。多台设备共用一个 NAT 出口时会一起被锁，用 `/api/auth/unlock` 或等 5 分钟即可。
+- 二维码依赖可选的 `qrcode` 包。没装时服务照常运行，只是分享抽屉里的扫码区变成一行提示（`/api/qr` 返回 503），链接复制不受影响。
 
 ## 测试
 
