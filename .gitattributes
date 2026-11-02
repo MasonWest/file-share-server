@@ -1,0 +1,5 @@
+# 第三方压缩产物按二进制处理：不做换行转换，避免每次 checkout 都出现假的 diff
+vendor/*.js -text
+
+# 批处理必须保持 CRLF，且是 GBK 编码（cmd 默认代码页）
+*.bat -text

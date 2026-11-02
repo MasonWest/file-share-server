@@ -269,6 +269,35 @@ def main() -> int:
     names = [item["name"] for item in everything["files"]]
     check("文件按名称稳定排序", names == sorted(names), str(names[:3]))
 
+    print("\n[安全响应头]")
+    page = c.get("/")
+    check("首页 nosniff", page.headers.get("x-content-type-options") == "nosniff")
+    check("首页禁止被 iframe 嵌入", page.headers.get("x-frame-options") == "DENY")
+    # 分享令牌在 URL 路径里，Referer 是最容易被忽视的泄漏口
+    check("首页 Referrer-Policy=no-referrer", page.headers.get("referrer-policy") == "no-referrer")
+    admin_csp = page.headers.get("content-security-policy") or ""
+    check("管理端 CSP 限制外连", "connect-src 'self'" in admin_csp, admin_csp[:40])
+
+    listing = c.get("/api/list", headers=ADMIN)
+    check("API 响应 no-store", listing.headers.get("cache-control") == "no-store")
+    check("API 响应 nosniff", listing.headers.get("x-content-type-options") == "nosniff")
+
+    # 鉴权中间件是提前 return 的，安全头必须仍在最外层才拦得住
+    unauth = c.get("/api/list")
+    check("401 响应也带 no-store", unauth.headers.get("cache-control") == "no-store", str(unauth.status_code))
+    check("401 响应也带 nosniff", unauth.headers.get("x-content-type-options") == "nosniff")
+
+    pub_missing = public_client().get("/s/no-such-token")
+    pub_csp = pub_missing.headers.get("content-security-policy") or ""
+    check("公网端 CSP 为 default-src none", "default-src 'none'" in pub_csp, pub_csp[:40])
+    check("公网端也禁 iframe", pub_missing.headers.get("x-frame-options") == "DENY")
+
+    print("\n[前端依赖本地化]")
+    vendor_js = c.get("/vendor/vue.global.prod.js")
+    check("vendor 下 Vue 可访问", vendor_js.status_code == 200, str(vendor_js.status_code))
+    check("vendor 资源长缓存", "max-age=604800" in (vendor_js.headers.get("cache-control") or ""))
+    check("index.html 不再引用公网 CDN", "unpkg.com" not in (page.text or "") and "cdn.tailwindcss" not in (page.text or ""))
+
     print("\n" + "=" * 52)
     print(f"合计 {len(PASSED) + len(FAILED)} 项：通过 {len(PASSED)}，失败 {len(FAILED)}")
     for name, note in FAILED:

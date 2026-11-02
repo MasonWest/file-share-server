@@ -11,7 +11,7 @@
 
 公网只会看到一个「给链接就能下载，不给链接什么都不知道」的端口。文件列表、上传能力全部留在内网端口。
 
-前端是单文件 `index.html`，用 Vue 3 的 CDN 全局构建，无打包步骤。
+前端是单文件 `index.html`，用 Vue 3 的全局构建，无打包步骤。Vue 与 Tailwind 的运行时放在 `vendor/` 由本服务自己提供，**不依赖任何公网 CDN**——私人服务不该因为断网就白屏。
 
 ## 功能
 
@@ -195,6 +195,8 @@ HTTP 接口才是稳定契约：Vclip 内部怎么存，这里不需要知道，
 | 接口清单 | 管理端的 `/docs`、`/openapi.json`、`/redoc` 全部关闭 |
 | 路径穿越 | `resolve()` 后再校验是否仍在 `BASE_DIR` 内，绝对路径直接拒绝 |
 | 下载限制 | Token 可设有效期与最大下载次数，超限即销毁；文件已删除时不消耗额度 |
+| 响应头 | 两端都带 `nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`（令牌在 URL 里，防 Referer 外泄）；管理端 CSP 把 `connect-src` 锁在本机，令牌即使被 XSS 拿到也没有出口 |
+| 缓存控制 | `/api/*` 与 `/s/*` 一律 `no-store`，带令牌的响应不进任何中间缓存 |
 
 需要注意：
 
@@ -212,6 +214,7 @@ file-share-server/
 ├── device_store.py      # 设备令牌签发 / 校验 / 撤销（只存哈希）
 ├── share_store.py       # 分享链接持久化（只存相对路径）
 ├── index.html           # 单页管理端 UI
+├── vendor/              # 前端依赖本地化（Vue / Tailwind），断网可用
 ├── run_server.py        # 双端口启动入口（asyncio.gather 同时跑两个 uvicorn）
 ├── test_filesvc.py      # 回归测试（python test_filesvc.py，无需 pytest）
 ├── start_server.bat     # Windows 快捷启动

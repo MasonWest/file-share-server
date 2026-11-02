@@ -34,6 +34,7 @@ from urllib import request as urlrequest
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from device_store import DeviceStore
@@ -374,6 +375,57 @@ def sync_share_link_to_vclip(share_url: str, expires_at: datetime) -> None:
         logger.warning("Failed to sync share link to Vclip: %s", exc)
 
 
+# ---------------------------------------------------------------- 安全响应头
+# 管理端是单文件 HTML + Vue 运行时编译，inline script 和 eval 都去不掉，
+# 所以 CSP 的 script 源必然宽松。它真正的价值在 connect-src / img-src / form-action：
+# 即使某个 XSS 拿到令牌，也没有出口把它发出去——只能回连本机。
+ADMIN_CSP = "; ".join(
+    [
+        "default-src 'self'",
+        "img-src 'self' data: blob:",
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+        "style-src 'self' 'unsafe-inline'",
+        "font-src 'self' data:",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+    ]
+)
+# 公网端只回下载流和错误页，不需要任何外部资源
+PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+
+
+def attach_security_headers(app: FastAPI, *, csp: str) -> None:
+    """补安全响应头与缓存策略。
+
+    Starlette 的 add_middleware 是 insert(0)，也就是**最后注册的在最外层**。
+    所以必须在 create_*_app 末尾调用，否则鉴权中间件提前返回的 401/423/403
+    会绕过这里，那些响应恰好最需要 no-store。
+    """
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        headers = response.headers
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("X-Frame-Options", "DENY")
+        # 分享令牌放在 URL 路径里，Referer 是最容易被忽视的泄漏通道
+        headers.setdefault("Referrer-Policy", "no-referrer")
+        headers.setdefault("Content-Security-Policy", csp)
+        headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+
+        path = request.url.path
+        if path.startswith("/vendor/"):
+            headers.setdefault("Cache-Control", "public, max-age=604800")
+        elif path.startswith("/api/") or path.startswith("/s/"):
+            # 带令牌的响应不该留在任何中间缓存里
+            headers.setdefault("Cache-Control", "no-store")
+        else:
+            headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
 # ---------------------------------------------------------------- 管理端
 def create_internal_app() -> FastAPI:
     # 管理端不暴露文档：/docs 与 /openapi.json 会把完整接口清单白送出去
@@ -395,6 +447,12 @@ def create_internal_app() -> FastAPI:
                 return token_response
 
         return await call_next(request)
+
+    # 前端依赖（Vue / Tailwind）放在 vendor/ 走本地静态服务。
+    # 原来引用两个公网 CDN——私人服务断网就白屏，这不叫降级，这叫罢工。
+    vendor_dir = PROJECT_DIR / "vendor"
+    if vendor_dir.is_dir():
+        app.mount("/vendor", StaticFiles(directory=str(vendor_dir)), name="vendor")
 
     @app.get("/")
     async def index():
@@ -632,6 +690,7 @@ def create_internal_app() -> FastAPI:
         logger.info("share revoked | token=%s", token)
         return {"revoked": token}
 
+    attach_security_headers(app, csp=ADMIN_CSP)
     return app
 
 
@@ -696,6 +755,7 @@ def create_public_app() -> FastAPI:
             media_type="application/octet-stream",
         )
 
+    attach_security_headers(app, csp=PUBLIC_CSP)
     return app
 
 
