@@ -219,7 +219,14 @@
     .stepper{display:flex;align-items:center;gap:10px}
     .stepper button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);font-size:15px}
     .stepper button:hover{color:var(--text);border-color:var(--dim)}
-    .stepper .val{font-variant-numeric:tabular-nums;font-weight:650;min-width:40px;text-align:center}
+    .stepper .val{
+      font-variant-numeric:tabular-nums;font-weight:650;width:66px;height:30px;box-sizing:border-box;
+      text-align:center;font-size:13px;font-family:inherit;padding:0 4px;
+      border:1px solid var(--line);border-radius:8px;background:var(--panel-2);color:var(--text);
+      -moz-appearance:textfield;
+    }
+    .stepper .val::-webkit-inner-spin-button,.stepper .val::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+    .stepper .val:focus{outline:none;border-color:color-mix(in srgb,var(--brand) 55%,var(--line))}
     .qr{display:flex;gap:14px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)}
     .qr-box{width:104px;height:104px;flex:0 0 auto;background:#fff;border-radius:8px;padding:6px;display:grid;place-items:center}
     .qr-box img{width:100%;height:100%;display:block}
@@ -753,9 +760,20 @@
           <div class="field">
             <label>下载次数上限</label>
             <div class="stepper">
-              <button @click="stepDownloads(-10)">−</button>
-              <div class="val">{{ shareDrawer.maxDownloads }}</div>
-              <button @click="stepDownloads(10)">+</button>
+              <button @click="stepDownloads(-1)" aria-label="减 1 次">−</button>
+              <input
+                class="val"
+                type="number"
+                min="1"
+                max="9999"
+                step="1"
+                inputmode="numeric"
+                aria-label="下载次数上限"
+                v-model.number="shareDrawer.maxDownloads"
+                @blur="normalizeDownloads"
+                @keydown.enter="$event.target.blur()"
+              />
+              <button @click="stepDownloads(1)" aria-label="加 1 次">+</button>
               <span class="dim" style="font-size:12px">次后链接自动失效</span>
             </div>
           </div>
@@ -1554,10 +1572,25 @@
           drawer.qrError = ""
         }
 
+        // 后端要求 >= 1，这里就不给 0 的选项，免得点了生成再吃一个 422
+        const DOWNLOAD_LIMIT_MIN = 1
+        const DOWNLOAD_LIMIT_MAX = 9999
+
+        function clampDownloads(raw) {
+          const n = Number(raw)
+          if (!Number.isFinite(n)) return 100
+          return Math.max(DOWNLOAD_LIMIT_MIN, Math.min(DOWNLOAD_LIMIT_MAX, Math.round(n)))
+        }
+
+        // 步进固定 ±1：加减 10 那种跳法很容易一下冲过头
         function stepDownloads(delta) {
-          const next = Number(shareDrawer.value.maxDownloads) + delta
-          // 后端要求 >= 1，这里就不给 0 的选项，免得点了生成再吃一个 422
-          shareDrawer.value.maxDownloads = Math.max(1, Math.min(9999, next))
+          const drawer = shareDrawer.value
+          drawer.maxDownloads = clampDownloads(clampDownloads(drawer.maxDownloads) + delta)
+        }
+
+        // 手动输入（含清空后失焦）兜回合法区间
+        function normalizeDownloads() {
+          shareDrawer.value.maxDownloads = clampDownloads(shareDrawer.value.maxDownloads)
         }
 
         async function loadQr(url) {
@@ -1595,7 +1628,7 @@
               body: JSON.stringify({
                 filepath: drawer.filepath,
                 expire_seconds: drawer.expireSeconds,
-                max_downloads: drawer.maxDownloads,
+                max_downloads: clampDownloads(drawer.maxDownloads),
               })
             })
 
@@ -1753,6 +1786,7 @@
           closeShareDrawer,
           confirmCreateShare,
           stepDownloads,
+          normalizeDownloads,
           expireOptions,
           copyShareUrl,
           copyShareLink,

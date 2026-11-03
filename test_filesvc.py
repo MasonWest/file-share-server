@@ -351,6 +351,14 @@ def main() -> int:
     check("vendor 资源长缓存", "max-age=604800" in (vendor_js.headers.get("cache-control") or ""))
     check("index.html 不再引用公网 CDN", "unpkg.com" not in (page.text or "") and "cdn.tailwindcss" not in (page.text or ""))
 
+    # 步进按钮曾经写成 ±10，点两下就从 2 跳到 22，这里钉死语义
+    print("\n[分享抽屉：下载次数]")
+    html = page.text or ""
+    check("步进按钮为 ±1", "stepDownloads(1)" in html and "stepDownloads(-1)" in html)
+    check("不再有 ±10 跳步", "stepDownloads(10)" not in html and "stepDownloads(-10)" not in html)
+    check("数值框可手填并限制 1~9999", 'min="1"' in html and 'max="9999"' in html)
+    check("提交前再 clamp 一次", "max_downloads: clampDownloads(" in html)
+
     print("\n" + "=" * 52)
     print(f"合计 {len(PASSED) + len(FAILED)} 项：通过 {len(PASSED)}，失败 {len(FAILED)}")
     for name, note in FAILED:
