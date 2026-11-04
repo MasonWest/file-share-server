@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -432,6 +433,25 @@ def main() -> int:
     check("首页声明 iOS 独立窗口", 'name="apple-mobile-web-app-capable"' in html)
     check("首页声明 iOS 应用名", 'name="apple-mobile-web-app-title"' in html)
     check("首页有 theme-color", 'name="theme-color"' in html)
+
+    # ------------------------------------------------ 手机端布局
+    # 原来 620px 的最小表格宽度塞进 360px 容器，分享/下载按钮落在 x=577，
+    # 也就是屏幕外面。没有横滑提示，等于这两个功能在手机上不存在。
+    print("\n[手机端布局]")
+    block = re.search(r"@media \(max-width:640px\)\{(.*?)\n    \}", html, re.S)
+    mobile_css = block.group(1) if block else ""
+    check("存在 ≤640px 手机断点", bool(mobile_css), f"{len(mobile_css)} chars")
+    check("手机端取消表格最小宽度", "table{min-width:0" in mobile_css)
+    check("表头改 chip 行（不直接藏，藏了就没排序入口）", "thead tr{display:flex" in mobile_css)
+    check("行内操作按钮改为绝对定位常驻右侧", "tbody td:nth-child(4){position:absolute" in mobile_css)
+    check("抽屉在手机上改为底部 sheet", "transform:translateY(102%)" in mobile_css)
+    # iOS 的经典坑：<16px 的输入框一聚焦就整页放大，而且不会自己缩回来
+    check("输入框 ≥16px 防 iOS 自动放大", "input:not([type=checkbox]):not([type=radio]){font-size:16px}" in html)
+    check("触屏替换掉「拖文件进来」文案", ".dz-touch{display:none}" in html and "@media (hover:none)" in html)
+    check("整块拖拽区可点（触屏无拖拽）", "handleDropzoneClick" in html)
+    check("抽屉打开时锁背景滚动", "body:has(.drawer.on)" in html)
+    check("处理刘海/底部横条安全区", "viewport-fit=cover" in html and "env(safe-area-inset-top)" in html)
+    check("文件夹行与文件行可区分", 'class="row-dir"' in html and 'class="row-file"' in html)
 
     print("\n" + "=" * 52)
     print(f"合计 {len(PASSED) + len(FAILED)} 项：通过 {len(PASSED)}，失败 {len(FAILED)}")

@@ -2,7 +2,7 @@
 <html lang="zh" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>FileBox · 私人文件分享</title>
 
   <!-- ===== PWA / iOS 主屏 ===== -->
@@ -58,11 +58,13 @@
       margin:0; background:var(--bg); color:var(--text);
       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
       -webkit-font-smoothing:antialiased;
+      /* 点按不要那块灰色高亮，自己用 :active 给反馈 */
+      -webkit-tap-highlight-color:transparent;
     }
     button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
     button:disabled{cursor:not-allowed;opacity:.55}
     input{font:inherit}
-    .app{display:flex;min-height:100vh}
+    .app{display:flex;min-height:100vh;min-height:100dvh}
 
     /* ---------- 侧边栏 ---------- */
     .sidebar{
@@ -146,6 +148,8 @@
       display:grid;place-items:center;color:var(--brand);flex:0 0 auto}
     .dz-title{font-weight:600;font-size:13.5px}
     .dz-sub{font-size:12px;color:var(--muted);margin-top:2px}
+    /* 触屏设备没有「拖进来」这回事，文案分开写，别让手机用户对着一句做不到的话发呆 */
+    .dz-touch{display:none}
     .dz-right{margin-left:auto;display:flex;gap:8px;align-items:center;flex:0 0 auto}
     .up-progress{height:4px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:8px}
     .up-progress > i{display:block;height:100%;background:var(--brand);transition:width .2s}
@@ -219,6 +223,8 @@
     /* ---------- 抽屉 ---------- */
     .scrim{position:fixed;inset:0;background:rgba(15,23,42,.42);opacity:0;pointer-events:none;transition:.2s;z-index:40}
     .scrim.on{opacity:1;pointer-events:auto}
+    /* 抽屉铺开时别让背后那页跟着滑，否则手指一动就是「双层滚动」 */
+    body:has(.drawer.on),body:has(.scrim.on){overflow:hidden}
     .drawer{
       position:fixed;top:0;right:0;height:100vh;width:420px;max-width:92vw;background:var(--panel);
       border-left:1px solid var(--line);z-index:50;transform:translateX(102%);
@@ -328,6 +334,113 @@
       .topbar{padding:10px 14px;gap:8px}
       .card-head h3{font-size:13px}
     }
+
+    /* ---------- 手机（≤640px）：表格改成卡片行 ----------
+       原来 620px 宽的表格塞在 360px 容器里，分享/下载按钮落在 x=577 的位置，
+       也就是屏幕外面。没有横滑提示，等于这两个功能在手机上不存在。 */
+    @media (max-width:640px){
+      /* iOS 里 font-size < 16px 的输入框一聚焦就整页放大，而且不会自己缩回来 */
+      input:not([type=checkbox]):not([type=radio]){font-size:16px}
+
+      .sidebar{padding:calc(8px + env(safe-area-inset-top)) 12px 8px;gap:2px}
+      .brand{padding:0 6px 0 0}
+      .brand-name{display:none}
+      .nav-item{min-height:40px;padding:9px 11px}
+
+      .topbar{flex-wrap:wrap;row-gap:8px;padding:8px 12px}
+      .crumb{flex:1 1 0;font-size:12.5px}
+      .search{order:9;flex:1 1 100%;width:auto}
+      .search input{padding:9px 12px 9px 34px}
+      .search svg{top:11px}
+      .icon-btn{width:36px;height:36px}
+
+      .content{padding:12px 12px calc(40px + env(safe-area-inset-bottom))}
+
+      .stats{grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+      .stat{padding:10px 12px;border-radius:12px}
+      .stat .v{font-size:18px}
+      .stat .t{display:none}
+
+      .dropzone{padding:12px;gap:10px;margin-bottom:10px}
+      .dz-sub{display:none}
+
+      .card-head{padding:10px 12px;gap:8px}
+      .card-head h3{font-size:12.5px}
+
+      /* 表头不能直接藏掉——藏了就没有排序入口。改成一行可点的 chip */
+      .table-wrap{overflow-x:visible}
+      table{min-width:0;display:block}
+      thead{display:block;background:var(--panel-2);border-bottom:1px solid var(--line)}
+      thead tr{display:flex;gap:6px;padding:8px 10px}
+      thead th{
+        display:block;width:auto!important;padding:8px 12px;border:0;border-radius:8px;
+        background:var(--panel);font-size:12px;line-height:1.2;
+      }
+      thead th:nth-child(3){display:block}
+      thead th:last-child{display:none}
+
+      tbody{display:block}
+      tbody tr{display:block;position:relative;padding:11px 12px;border-bottom:1px solid var(--line)}
+      tbody tr:last-child{border-bottom:0}
+      tbody td{display:block;padding:0;border:0}
+      tbody td:nth-child(1){padding-right:108px}
+      tbody td:nth-child(2),tbody td:nth-child(3){
+        display:inline-block;font-size:11.5px;margin-top:2px;
+      }
+      tbody td:nth-child(2)::after{content:" · "}
+      tr.row-dir td:nth-child(2){display:none}
+      tr.row-dir td:nth-child(3)::before{content:"文件夹 · "}
+      tbody td:nth-child(4){position:absolute;right:8px;top:50%;transform:translateY(-50%)}
+
+      .row-actions{opacity:1;gap:6px}
+      .row-actions .btn-sm{padding:0 11px;min-height:34px;font-size:12px}
+
+      .fname{gap:8px}
+      .fname .nm{
+        white-space:normal;line-height:1.35;
+        display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+      }
+      .ficon{width:28px;height:28px;font-size:9px;border-radius:7px}
+
+      /* 抽屉改成底部 sheet：拇指够得到，也是 iOS 的肌肉记忆 */
+      .drawer{
+        top:auto;bottom:0;left:0;right:0;width:100%;max-width:100%;
+        height:auto;max-height:88vh;border-left:0;border-top:1px solid var(--line);
+        border-radius:18px 18px 0 0;transform:translateY(102%);
+        box-shadow:0 -24px 60px -30px rgba(0,0,0,.5);
+      }
+      .drawer.on{transform:none}
+      /* 顶部一根小横条：iOS 的 sheet 都长这样，用户一眼知道这东西能拖/能收 */
+      .drawer::before{
+        content:"";position:absolute;top:7px;left:50%;transform:translateX(-50%);
+        width:36px;height:5px;border-radius:3px;background:var(--line);
+      }
+      .dr-head{padding:20px 16px 12px}
+      .dr-body{padding:14px 16px}
+      .dr-foot{padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+      .dr-foot .btn{flex:1;min-height:46px}
+      /* 手指不是鼠标，30px 的加减号在手机上属于「点三次中一次」 */
+      .stepper button{width:38px;height:38px;font-size:17px}
+      .stepper .val{height:38px;font-size:16px}
+      .chip{min-height:38px;padding:8px 14px;font-size:13px}
+
+      .share-grid{grid-template-columns:1fr;padding:12px;gap:10px}
+      .kv-grid{padding:12px;gap:10px}
+      /* 8 张配置卡在手机上能占满两屏，压到一屏半以内 */
+      .kv{padding:10px 12px;border-radius:10px}
+      .kv .v{margin-top:3px;font-size:13px}
+      .dev-item{padding:12px 0}
+      .empty{padding:34px 16px}
+      .login-wrap{padding:16px}
+    }
+
+    /* 触屏根本没有 :hover，用 :active 给点按反馈 */
+    @media (hover:none){
+      .dz-desktop{display:none}
+      .dz-touch{display:inline}
+      .btn:active,.chip:active,.icon-btn:active{transform:scale(.97)}
+      .nav-item:active,tbody tr:active,.dev-item:active{background:var(--panel-2)}
+    }
   </style>
 </head>
 <body>
@@ -417,15 +530,19 @@
       <div class="main">
         <header class="topbar">
           <div class="crumb">
-            <button @click="goToPath('')">根目录</button>
-            <template v-for="(part, index) in pathParts" :key="index">
-              <span class="sep">/</span>
-              <button
-                v-if="index < pathParts.length - 1"
-                @click="goToPath(pathParts.slice(0, index + 1).join('/'))"
-              >{{ part }}</button>
-              <span v-else class="cur">{{ part }}</span>
+            <!-- 分享页/设置页显示文件路径没有任何意义，换成当前页名 -->
+            <template v-if="currentView === 'files'">
+              <button @click="goToPath('')">根目录</button>
+              <template v-for="(part, index) in pathParts" :key="index">
+                <span class="sep">/</span>
+                <button
+                  v-if="index < pathParts.length - 1"
+                  @click="goToPath(pathParts.slice(0, index + 1).join('/'))"
+                >{{ part }}</button>
+                <span v-else class="cur">{{ part }}</span>
+              </template>
             </template>
+            <span v-else class="cur">{{ currentView === 'shares' ? '分享链接' : '设置' }}</span>
           </div>
 
           <div class="search" v-if="currentView === 'files'">
@@ -484,6 +601,7 @@
               @dragover.prevent="isDragOver = true"
               @dragleave.prevent="isDragOver = false"
               @drop.prevent="handleDrop"
+              @click="handleDropzoneClick"
             >
               <div class="dz-icon">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
@@ -492,7 +610,10 @@
                 <div class="dz-title">
                   <template v-if="uploading">正在上传 {{ uploadIndex }} / {{ uploadQueue.length }} · {{ uploadName }}</template>
                   <template v-else-if="uploadQueue.length">已选 {{ uploadQueue.length }} 个文件</template>
-                  <template v-else>拖文件到这里，或点击选择</template>
+                  <template v-else>
+                    <span class="dz-desktop">拖文件到这里，或点击选择</span>
+                    <span class="dz-touch">点这里选择文件上传</span>
+                  </template>
                 </div>
                 <div class="dz-sub">
                   支持多选 · 逐个上传 · 单文件上限 {{ serverInfo.upload_limit_mb || uploadLimitMb || '?' }} MB
@@ -536,7 +657,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="folder in filteredFolders" :key="folder.path">
+                    <tr v-for="folder in filteredFolders" :key="folder.path" class="row-dir">
                       <td>
                         <div class="fname">
                           <div class="ficon fi-dir">DIR</div>
@@ -558,7 +679,7 @@
                       </td>
                     </tr>
 
-                    <tr v-for="file in filteredFiles" :key="file.path">
+                    <tr v-for="file in filteredFiles" :key="file.path" class="row-file">
                       <td>
                         <div class="fname">
                           <div class="ficon" :class="fileBadge(file.name).cls">{{ fileBadge(file.name).label }}</div>
@@ -1454,6 +1575,15 @@
           if (fileInput.value) fileInput.value.click()
         }
 
+        // 手机上「拖进来」根本不存在，整块区域要能点。桌面保留精确点击，
+        // 免得手一抖点空白就开始选文件。
+        function handleDropzoneClick(event) {
+          // input 也在 dropzone 里：fileInput.click() 的合成事件会冒泡回来，不拦住就无限递归
+          if (event.target.closest("button, input")) return
+          if (!window.matchMedia("(hover: none)").matches) return
+          triggerUpload()
+        }
+
         function addToQueue(list) {
           const limitMb = Number(uploadLimitMb.value || serverInfo.value.upload_limit_mb || 0)
           const accepted = []
@@ -1826,6 +1956,7 @@
           isDragOver,
           fileInput,
           triggerUpload,
+          handleDropzoneClick,
           handleFilePick,
           handleDrop,
           upload,
