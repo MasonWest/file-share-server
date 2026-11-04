@@ -4,12 +4,33 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FileBox · 私人文件分享</title>
+
+  <!-- ===== PWA / iOS 主屏 ===== -->
+  <!-- iOS 不读 manifest 的 icons，主屏图标只认 apple-touch-icon 这张 180x180 的 PNG -->
+  <meta name="theme-color" content="#4f46e5" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/static/favicon.ico" sizes="32x32" />
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
+  <!-- 独立窗口：iOS 至今不认 manifest 的 display，只能靠这几个老 meta -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="FileBox" />
+  <meta name="application-name" content="FileBox" />
+  <meta name="format-detection" content="telephone=no" />
+
   <!-- 主题必须在样式生效前定下来，否则深色用户会先看到一帧白屏 -->
   <script>
     try {
       var savedTheme = localStorage.getItem("theme");
       if (savedTheme === "dark" || savedTheme === "light") {
         document.documentElement.dataset.theme = savedTheme;
+      }
+      // 状态栏/任务栏颜色跟着主题走，否则深色下顶上挂一条白带
+      var themeMeta = document.querySelector('meta[name="theme-color"]');
+      if (themeMeta && document.documentElement.dataset.theme === "dark") {
+        themeMeta.setAttribute("content", "#0b0f17");
       }
     } catch (e) {}
   </script>
@@ -1028,9 +1049,16 @@
           clearAuth()
         }
 
+        // 浏览器 UI 的配色（Android 状态栏 / 桌面标题栏）跟着主题走
+        function syncThemeColor() {
+          const meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.setAttribute("content", theme.value === "dark" ? "#0b0f17" : "#4f46e5")
+        }
+
         function toggleTheme() {
           theme.value = theme.value === "dark" ? "light" : "dark"
           document.documentElement.dataset.theme = theme.value
+          syncThemeColor()
           try {
             localStorage.setItem("theme", theme.value)
           } catch (error) {
@@ -1826,6 +1854,17 @@
         }
       }
     }).mount("#app")
+
+    // PWA：Service Worker 只在安全上下文（HTTPS / localhost）下可注册。
+    // 内网 http://192.168.x.x:8800 打开时浏览器压根不给 navigator.serviceWorker，
+    // 所以这里静默跳过——iOS「添加到主屏幕」不依赖 SW，图标和独立窗口照样生效。
+    if ("serviceWorker" in navigator && window.isSecureContext) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(function () {
+          // SW 是增强项，注册失败不影响任何主流程，别往控制台倒垃圾
+        })
+      })
+    }
   </script>
 </body>
 </html>

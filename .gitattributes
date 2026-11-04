@@ -3,3 +3,10 @@ vendor/*.js -text
 
 # 批处理必须保持 CRLF，且是 GBK 编码（cmd 默认代码页）
 *.bat -text
+
+# 图标是二进制：换行归一化会直接把文件改坏
+*.png binary
+*.ico binary
+
+# manifest 是 JSON，保持写入时的原样
+*.webmanifest -text

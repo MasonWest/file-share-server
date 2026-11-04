@@ -6,3 +6,7 @@ python-multipart==0.0.20
 # 可选：生成分享二维码。不装也能跑，只是「创建分享」抽屉里的扫码区
 # 会降级成链接框（服务端 /api/qr 返回 503，前端自动隐藏二维码）。
 qrcode==8.2
+
+# 可选：只在重新生成 PWA 图标时用到（python scripts/make_icons.py）。
+# 仓库里已带生成好的 PNG / ICO，跑服务本身不需要它。
+pillow>=10.0

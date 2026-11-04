@@ -406,6 +406,9 @@ ADMIN_CSP = "; ".join(
 # 公网端只回下载流和错误页，不需要任何外部资源
 PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
 
+# 浏览器自动发起、拿不到自定义请求头的路径：必须免鉴权，否则 PWA 装不上
+PWA_EXEMPT = {"/", "/api/auth/login", "/manifest.webmanifest", "/sw.js", "/favicon.ico"}
+
 
 def attach_security_headers(app: FastAPI, *, csp: str) -> None:
     """补安全响应头与缓存策略。
@@ -429,6 +432,9 @@ def attach_security_headers(app: FastAPI, *, csp: str) -> None:
         path = request.url.path
         if path.startswith("/vendor/"):
             headers.setdefault("Cache-Control", "public, max-age=604800")
+        elif path.startswith("/static/"):
+            # 图标 / manifest 不会天天变，但也不是永远不变——给一天，别学 vendor 给一周
+            headers.setdefault("Cache-Control", "public, max-age=86400")
         elif path.startswith("/api/") or path.startswith("/s/"):
             # 带令牌的响应不该留在任何中间缓存里
             headers.setdefault("Cache-Control", "no-store")
@@ -445,7 +451,13 @@ def create_internal_app() -> FastAPI:
     @app.middleware("http")
     async def admin_auth_middleware(request: Request, call_next):
         path = request.url.path
-        if request.method == "OPTIONS" or path == "/" or path == "/api/auth/login":
+        # PWA 这三样是浏览器自己发起的请求，带不了自定义令牌头。
+        # 拦下来只会让 manifest 401、SW 注册失败，然后你在 DevTools 里盯着一个空 manifest 发呆。
+        if (
+            request.method == "OPTIONS"
+            or path in PWA_EXEMPT
+            or path.startswith("/static/")
+        ):
             return await call_next(request)
 
         if path.startswith("/api/"):
@@ -464,6 +476,38 @@ def create_internal_app() -> FastAPI:
     vendor_dir = PROJECT_DIR / "vendor"
     if vendor_dir.is_dir():
         app.mount("/vendor", StaticFiles(directory=str(vendor_dir)), name="vendor")
+
+    # 图标、manifest、SW 走 /static。MIME 比路径重要：
+    # manifest 必须是 application/manifest+json，否则 Chrome 会当普通文件下载。
+    static_dir = PROJECT_DIR / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def manifest():
+        path = static_dir / "manifest.webmanifest"
+        if not path.exists():
+            raise HTTPException(404, "manifest missing")
+        return FileResponse(path, media_type="application/manifest+json")
+
+    @app.get("/sw.js", include_in_schema=False)
+    async def service_worker():
+        path = static_dir / "sw.js"
+        if not path.exists():
+            raise HTTPException(404, "service worker missing")
+        # SW 本身绝不能被缓存：缓存住的 SW 永远不会自己更新
+        return FileResponse(
+            path,
+            media_type="text/javascript",
+            headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+        )
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        path = static_dir / "favicon.ico"
+        if not path.exists():
+            raise HTTPException(404, "favicon missing")
+        return FileResponse(path, media_type="image/x-icon")
 
     @app.get("/")
     async def index():

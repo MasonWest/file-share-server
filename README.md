@@ -26,6 +26,7 @@
 - **路径安全**：绝对路径和 `..` 穿越一律拒绝，所有操作限制在 `SHARE_DIR` 内
 - **设备免密登录**：首次输一次口令，之后本设备凭设备令牌直接进入；设备丢失可单独撤销，不影响其他设备
 - **渐进式防爆破**：连续错 5 次锁定 5 分钟，再犯翻倍（上限 1 小时），可从已登录设备解锁
+- **可装到主屏**：自带 manifest 与 iOS 主屏图标，手机 / 桌面添加后以独立窗口运行（见「添加到主屏」）
 
 ## 环境要求
 
@@ -210,6 +211,44 @@ HTTP 接口才是稳定契约：Vclip 内部怎么存，这里不需要知道，
 - **对外暴露公网端口请套 HTTPS**。Token 在 URL 路径里，明文 HTTP 会进各种中间日志。
 - 管理口令建议用「好记但够长」的短语（如 `mason-travel-2026`），不必背随机串——强度由设备令牌、限流和端口隔离共同承担。
 
+## 添加到主屏（PWA）
+
+服务自带 manifest、图标和 Service Worker，可以像原生应用一样挂到桌面 / 手机主屏，打开就是独立窗口，没有地址栏。
+
+**iPhone / iPad**（必须用 Safari，iOS 上的 Chrome 不支持）：
+
+1. Safari 打开 `http://内网IP:8800`
+2. 点底部「分享」→「添加到主屏幕」
+3. 图标上显示的名字是 **FileBox**
+
+**Android / 桌面 Chrome / Edge**：
+
+- 地址栏右侧出现安装图标时直接点；没有的话用菜单里的「安装 FileBox」或「添加到主屏幕」。
+
+### 为什么这里要分「真 PWA」和「准 PWA」
+
+Service Worker 要求**安全上下文**：只有 `https://` 或 `localhost` 才允许注册。这套服务跑在内网 `http://192.168.x.x:8800`，所以：
+
+| 能力 | iOS Safari | Android / 桌面 Chrome（http 内网） |
+|---|---|---|
+| 主屏图标 + 自定义名称 | ✅ `apple-touch-icon` | ✅ manifest |
+| 独立窗口全屏运行 | ✅ | ⚠️ 只能做成快捷方式 |
+| 离线打开（SW 缓存外壳） | ❌ iOS 不支持 SW 缓存壳 | ❌ http 下 SW 注册不了 |
+
+也就是说：**图标、名字、独立窗口这三件最实用的事都能用**，只有「断网还能开」需要 HTTPS 才成立。SW 代码已经写好并会静默跳过，等哪天套了 HTTPS 就自动生效。
+
+> SW 有一条硬规矩：**绝不缓存 `/api/*` 和 `/s/*`**。前者带设备令牌，后者带分享令牌，缓存等于把凭证留在磁盘上。只缓存 `/vendor/`、`/static/` 和页面外壳，且页面走 network-first，改一版 UI 刷新就是新的。
+
+### 换配色 / 改图标
+
+`static/icon.svg` 是矢量源文件，PNG 由它同构生成（Pillow 重绘，不依赖 cairo）：
+
+```bash
+python scripts/make_icons.py
+```
+
+会重新产出 `icon-1024/512/192.png`、`apple-touch-icon.png`（iOS 主屏唯一认的 180×180）、`icon-maskable-512.png`（Android 自适应）、`favicon.ico`。要改颜色就改 `scripts/make_icons.py` 顶部的 `STOPS` / `BRAND`，同时把 `static/icon.svg` 里的渐变 stop 一起改掉。
+
 ## 项目结构
 
 ```
@@ -218,7 +257,10 @@ file-share-server/
 ├── device_store.py      # 设备令牌签发 / 校验 / 撤销（只存哈希）
 ├── share_store.py       # 分享链接持久化（只存相对路径）
 ├── index.html           # 单页管理端 UI（三视图 + 自带设计系统）
+├── static/              # PWA 资源：manifest、Service Worker、图标
 ├── vendor/              # 前端依赖本地化（只有 Vue），断网可用
+├── scripts/
+│   └── make_icons.py    # 生成 iOS / Android / favicon 各尺寸图标
 ├── run_server.py        # 双端口启动入口（asyncio.gather 同时跑两个 uvicorn）
 ├── test_filesvc.py      # 回归测试（python test_filesvc.py，无需 pytest）
 ├── start_server.bat     # Windows 快捷启动

@@ -359,6 +359,80 @@ def main() -> int:
     check("数值框可手填并限制 1~9999", 'min="1"' in html and 'max="9999"' in html)
     check("提交前再 clamp 一次", "max_downloads: clampDownloads(" in html)
 
+    # ------------------------------------------------ PWA
+    # manifest / sw.js / 图标全是浏览器自发请求，带不上 X-Admin-Token。
+    # 一旦被鉴权中间件拦掉，表现是 manifest 401 + SW 注册失败，
+    # 而 DevTools 只会安静地显示一个空 manifest——排查起来能耗掉一下午。
+    print("\n[PWA]")
+    anon = client()
+
+    man = anon.get("/manifest.webmanifest")
+    check("manifest 免鉴权可访问", man.status_code == 200, str(man.status_code))
+    check(
+        "manifest MIME 为 application/manifest+json",
+        "application/manifest+json" in (man.headers.get("content-type") or ""),
+        man.headers.get("content-type") or "",
+    )
+    try:
+        manifest = man.json()
+    except Exception:  # noqa: BLE001 - 解析失败就走下面的空字典断言
+        manifest = {}
+    check("manifest 有 name 与 short_name", bool(manifest.get("name")) and bool(manifest.get("short_name")))
+    check(
+        "manifest start_url / scope 都在根",
+        manifest.get("start_url") == "/" and manifest.get("scope") == "/",
+        f"{manifest.get('start_url')} / {manifest.get('scope')}",
+    )
+    check("manifest display 为 standalone", manifest.get("display") == "standalone")
+    check("manifest 声明中文与主题色", manifest.get("lang") == "zh-CN" and manifest.get("theme_color") == "#4f46e5")
+
+    icons = manifest.get("icons") or []
+    icon_sizes = {i.get("sizes") for i in icons}
+    check("manifest 含 192 与 512 图标", {"192x192", "512x512"} <= icon_sizes, str(icon_sizes))
+    check("manifest 含 maskable 图标", any(i.get("purpose") == "maskable" for i in icons))
+    check("manifest 图标路径均在 /static 下", all(str(i.get("src", "")).startswith("/static/") for i in icons))
+
+    sw = anon.get("/sw.js")
+    check("sw.js 免鉴权可访问", sw.status_code == 200, str(sw.status_code))
+    check("sw.js MIME 为 JS", "javascript" in (sw.headers.get("content-type") or ""), sw.headers.get("content-type") or "")
+    check("sw.js 自身不可缓存", "no-cache" in (sw.headers.get("cache-control") or ""), sw.headers.get("cache-control") or "")
+    check("sw.js 作用域放开到根", sw.headers.get("service-worker-allowed") == "/")
+    sw_body = sw.text or ""
+    # 缓存 API 响应等于把设备令牌、分享令牌落到磁盘上，这条底线不能松
+    check(
+        "sw 明确跳过 /api/ 与 /s/",
+        'pathname.startsWith("/api/")' in sw_body and 'pathname.startsWith("/s/")' in sw_body,
+    )
+
+    for name, ctype in (
+        ("apple-touch-icon.png", "image/png"),
+        ("icon-192.png", "image/png"),
+        ("icon-512.png", "image/png"),
+        ("icon-maskable-512.png", "image/png"),
+        ("icon.svg", "image/svg+xml"),
+        ("favicon.ico", "image/"),
+    ):
+        resp = anon.get(f"/static/{name}")
+        check(f"图标 {name} 可访问且非空", resp.status_code == 200 and len(resp.content) > 400, str(resp.status_code))
+        check(f"图标 {name} MIME 正确", ctype in (resp.headers.get("content-type") or ""), resp.headers.get("content-type") or "")
+
+    check(
+        "静态资源缓存一天（比 vendor 短）",
+        "max-age=86400" in (anon.get("/static/icon-192.png").headers.get("cache-control") or ""),
+    )
+
+    check(
+        "首页挂载 manifest",
+        'rel="manifest"' in html and "/manifest.webmanifest" in html,
+    )
+    check(
+        "首页挂 apple-touch-icon（iOS 主屏唯一入口）",
+        'rel="apple-touch-icon"' in html and "/static/apple-touch-icon.png" in html,
+    )
+    check("首页声明 iOS 独立窗口", 'name="apple-mobile-web-app-capable"' in html)
+    check("首页声明 iOS 应用名", 'name="apple-mobile-web-app-title"' in html)
+    check("首页有 theme-color", 'name="theme-color"' in html)
+
     print("\n" + "=" * 52)
     print(f"合计 {len(PASSED) + len(FAILED)} 项：通过 {len(PASSED)}，失败 {len(FAILED)}")
     for name, note in FAILED:
