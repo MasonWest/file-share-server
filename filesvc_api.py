@@ -639,7 +639,7 @@ def create_internal_app() -> FastAPI:
 
     @app.get("/api/list")
     @app.get("/api/list/{path:path}")
-    async def list_files(path: str = "", limit: int = -1, offset: int = 0):
+    def list_files(path: str = "", limit: int = -1, offset: int = 0, q: str = ""):
         """目录列表。folders 全量返回，files 分页返回。
 
         分页只作用在文件上：一个目录里的子目录通常几个到几十个，全发出去
@@ -652,10 +652,37 @@ def create_internal_app() -> FastAPI:
         files = []
         folders = []
 
-        for entry in target_dir.iterdir():
+        query = q.strip().casefold()
+
+        def entries():
+            if not query:
+                yield from target_dir.iterdir()
+                return
+            # 不跟随目录链接 / Windows junction，避免越界、重复与目录环。
+            # 同步路由在线程池遍历，慢磁盘不会阻塞其他异步接口。
+            for directory, dirs, names in os.walk(target_dir, followlinks=False):
+                parent = Path(directory)
+                safe_dirs = []
+                for name in dirs:
+                    child = parent / name
+                    try:
+                        child.resolve().relative_to(target_dir)
+                        if child.is_symlink() or getattr(child, "is_junction", lambda: False)():
+                            continue
+                    except (OSError, ValueError, RuntimeError):
+                        continue
+                    safe_dirs.append(name)
+                dirs[:] = safe_dirs
+                for name in safe_dirs + names:
+                    if query in name.casefold():
+                        yield parent / name
+
+        for entry in entries():
             try:
+                # 文件链接也必须留在共享根目录内。
+                entry.resolve().relative_to(BASE_DIR)
                 stat = entry.stat()
-            except OSError:
+            except (OSError, ValueError, RuntimeError):
                 # 单个条目读不到（权限 / 断链 / 网络盘抖动）不该让整页 500
                 continue
             item = {
@@ -670,8 +697,8 @@ def create_internal_app() -> FastAPI:
 
         # 稳定排序：文件多时前端「加载更多」才有确定顺序，
         # 排序还让 SMB 目录的 iterdir 抖动不会导致条目在分页间重复/漏掉。
-        folders.sort(key=lambda item: item["name"].lower())
-        files.sort(key=lambda item: item["name"].lower())
+        folders.sort(key=lambda item: (item["name"].casefold(), item["path"]))
+        files.sort(key=lambda item: (item["name"].casefold(), item["path"]))
 
         total_files = len(files)
         page_size = DEFAULT_PAGE_SIZE if limit < 0 else limit

@@ -323,6 +323,38 @@ def main() -> int:
     names = [item["name"] for item in everything["files"]]
     check("文件按名称稳定排序", names == sorted(names), str(names[:3]))
 
+    print("\n[递归搜索]")
+    search_dir = share / "search_scope"
+    deep = search_dir / "nested" / "deep"
+    deep.mkdir(parents=True, exist_ok=True)
+    (search_dir / "Report.TXT").write_text("root match", encoding="utf-8")
+    (deep / "report.txt").write_text("nested match", encoding="utf-8")
+    (deep / "预算 报表.txt").write_text("unicode", encoding="utf-8")
+    (search_dir / "report-folder").mkdir(exist_ok=True)
+    (share / "report-outside.txt").write_text("outside scope", encoding="utf-8")
+    search_url = "/api/list/search_scope"
+    results = c.get(search_url, params={"q": "  REPORT  ", "limit": 1}, headers=ADMIN).json()
+    check("搜索忽略大小写与首尾空格", results["total_files"] == 2, str(results))
+    check("递归匹配文件夹", [f["name"] for f in results["folders"]] == ["report-folder"])
+    check("搜索结果先匹配再分页", len(results["files"]) == 1 and results["has_more"])
+    next_result = c.get(search_url, params={"q": "report", "limit": 1, "offset": results["next_offset"]}, headers=ADMIN).json()
+    all_paths = {f["path"] for f in results["files"] + next_result["files"]}
+    check("同名文件保留各自完整路径", all_paths == {"search_scope/Report.TXT", "search_scope/nested/deep/report.txt"}, str(all_paths))
+    check("搜索不会进入当前目录的父级或兄弟目录", "report-outside.txt" not in all_paths and results["total_files"] == 2)
+    chinese = c.get(search_url, params={"q": "预算 报表"}, headers=ADMIN).json()
+    check("支持中文及空格文件名", chinese["total_files"] == 1 and chinese["files"][0]["path"].endswith("deep/预算 报表.txt"))
+    empty = c.get(search_url, params={"q": "no-such-file"}, headers=ADMIN).json()
+    check("无匹配返回空列表与准确总数", empty["files"] == [] and empty["folders"] == [] and empty["total_files"] == 0)
+    plain = c.get(search_url, params={"q": "  "}, headers=ADMIN).json()
+    check("空搜索恢复普通目录浏览", plain["total_files"] == 1 and len(plain["folders"]) == 2)
+    later_file = c.get("/api/list/many", params={"q": "f24", "limit": 1}, headers=ADMIN).json()
+    check("搜索能找到未加载页中的文件", later_file["total_files"] == 1 and later_file["files"][0]["name"] == "f24.txt")
+    root_search = c.get("/api/list", params={"q": "预算 报表"}, headers=ADMIN).json()
+    check("根目录搜索包含深层文件", root_search["total_files"] == 1)
+    check("搜索接口需要鉴权", c.get(search_url, params={"q": "report"}).status_code == 401)
+    check("搜索仍拒绝目录穿越", c.get("/api/list/..%2F..", params={"q": "report"}, headers=ADMIN).status_code == 400)
+    check("公网端不能搜索", public_client().get(search_url, params={"q": "report"}).status_code == 403)
+
     print("\n[安全响应头]")
     page = c.get("/")
     check("首页 nosniff", page.headers.get("x-content-type-options") == "nosniff")
